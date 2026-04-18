@@ -1,6 +1,14 @@
 # Orizon Agents — Backend
 
-FastAPI + Agno + OpenAI `gpt-4o-mini`. The brain behind the Orizon Agents frontend.
+FastAPI + Agno + OpenAI. The brain behind the Orizon Agents frontend.
+
+## Repositories
+
+| layer | repo |
+| --- | --- |
+| Backend (this repo) | https://github.com/ALGOREX-PH/Orizon-Agents-BE-Stellar |
+| Frontend — Next.js | https://github.com/ALGOREX-PH/Orizon-Agents-FE-Stellar |
+| Smart Contracts — Soroban / Rust | https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar |
 
 ## Setup
 
