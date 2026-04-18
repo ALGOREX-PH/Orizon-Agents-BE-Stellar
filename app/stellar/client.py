@@ -143,11 +143,14 @@ def invoke_with_server_key(
     for _ in range(30):
         status = server.get_transaction(sent.hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
+            rv = _extract_return_value(status.result_meta_xdr)
+            if isinstance(rv, (bytes, bytearray)):
+                rv = rv.hex()
             return {
                 "hash": sent.hash,
                 "status": status.status.value,
                 "ledger": status.ledger,
-                "result": scval.to_native(status.return_value) if status.return_value else None,
+                "result": rv,
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}
