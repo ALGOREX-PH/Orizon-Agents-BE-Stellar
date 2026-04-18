@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Local dev runner. Production hosts (Render/Fly/Cloud Run) inject $PORT
+# and call uvicorn directly — this script is for `./run.sh` on your laptop.
 set -e
 cd "$(dirname "$0")"
 
@@ -14,4 +16,8 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-exec .venv/bin/python -m uvicorn app.main:app --reload --port 8000 --host 0.0.0.0
+PORT="${PORT:-8000}"
+HOST="${HOST:-0.0.0.0}"
+RELOAD="${RELOAD:---reload}"
+
+exec .venv/bin/python -m uvicorn app.main:app $RELOAD --port "$PORT" --host "$HOST"
