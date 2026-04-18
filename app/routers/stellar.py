@@ -153,9 +153,11 @@ class SubmitReq(BaseModel):
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
     try:
-        return sc.submit_signed_xdr(req.signed_xdr)
+        result = sc.submit_signed_xdr(req.signed_xdr)
     except Exception as e:
         raise HTTPException(400, f"submit failed: {e}") from e
+    # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
+    return result
 
 
 # ── writes (backend signs with STELLAR_SIGNING_KEY) ──────────────

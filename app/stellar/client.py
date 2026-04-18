@@ -220,14 +220,48 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
             rv = _extract_return_value(status.result_meta_xdr)
             if isinstance(rv, (bytes, bytearray)):
                 rv = rv.hex()
+            diag = _extract_diagnostics(status)
+            if status.status == GetTransactionStatus.FAILED:
+                print(
+                    f"[stellar.submit] tx {sent.hash} FAILED · {diag}",
+                    file=sys.stderr,
+                )
             return {
                 "hash": sent.hash,
                 "status": status.status.value,
                 "ledger": status.ledger,
                 "return_value": rv,
+                "diagnostic": diag,
+                "explorer": f"https://stellar.expert/explorer/testnet/tx/{sent.hash}",
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}
+
+
+def _extract_diagnostics(status: Any) -> str:
+    """Summarize failure reasons from diagnostic events + result xdr."""
+    bits: list[str] = []
+    try:
+        from stellar_sdk import xdr as _xdr
+
+        for ev_xdr in (getattr(status, "diagnostic_events_xdr", None) or []):
+            try:
+                ev = _xdr.DiagnosticEvent.from_xdr(ev_xdr)
+                # Re-stringify the interesting parts without crashing on exotic shapes.
+                s = str(ev)
+                # Keep the message terse — drop internal whitespace.
+                s = " ".join(s.split())
+                if "Error(" in s or "error" in s.lower():
+                    bits.append(s[:360])
+            except Exception:
+                continue
+        if not bits:
+            rxdr = getattr(status, "result_xdr", None)
+            if rxdr:
+                bits.append(f"result_xdr={rxdr[:120]}")
+    except Exception as e:
+        bits.append(f"(diag parse: {e})")
+    return " | ".join(bits) if bits else "no diagnostic events"
 
 
 def _extract_return_value(result_meta_xdr: str | None) -> Any:
