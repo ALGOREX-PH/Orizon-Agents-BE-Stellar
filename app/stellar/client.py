@@ -187,25 +187,48 @@ def build_invoke_xdr(
 
 def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     """Submit a user-signed (via Freighter) prepared transaction."""
+    import sys
+    import time
+
     from stellar_sdk import TransactionEnvelope
 
     server = _server()
-    env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
+    try:
+        env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
+    except Exception as e:
+        print(f"[stellar.submit] bad XDR: {e}", file=sys.stderr)
+        raise RuntimeError(
+            f"bad signed XDR (likely wrong networkPassphrase or malformed): {e}"
+        ) from e
+
     sent = server.send_transaction(env)
     if sent.status != SendTransactionStatus.PENDING:
-        raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
+        detail = (
+            f"status={sent.status} "
+            f"error={getattr(sent, 'error_result_xdr', None)} "
+            f"hash={sent.hash}"
+        )
+        print(f"[stellar.submit] send failed: {detail}", file=sys.stderr)
+        raise RuntimeError(f"submit failed ({detail})")
 
-    import time
     for _ in range(30):
         status = server.get_transaction(sent.hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
+            rv = None
+            if status.return_value is not None:
+                try:
+                    rv = scval.to_native(status.return_value)
+                except Exception as e:
+                    print(f"[stellar.submit] decode return_value failed: {e}", file=sys.stderr)
+                    rv = None
+            # encode bytes as hex for JSON
+            if isinstance(rv, (bytes, bytearray)):
+                rv = rv.hex()
             return {
                 "hash": sent.hash,
                 "status": status.status.value,
                 "ledger": status.ledger,
-                "return_value": scval.to_native(status.return_value)
-                if status.return_value
-                else None,
+                "return_value": rv,
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}
