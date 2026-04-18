@@ -214,14 +214,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     for _ in range(30):
         status = server.get_transaction(sent.hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
-            rv = None
-            if status.return_value is not None:
-                try:
-                    rv = scval.to_native(status.return_value)
-                except Exception as e:
-                    print(f"[stellar.submit] decode return_value failed: {e}", file=sys.stderr)
-                    rv = None
-            # encode bytes as hex for JSON
+            rv = _extract_return_value(status.result_meta_xdr)
             if isinstance(rv, (bytes, bytearray)):
                 rv = rv.hex()
             return {
@@ -232,6 +225,32 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}
+
+
+def _extract_return_value(result_meta_xdr: str | None) -> Any:
+    """Pull the Soroban contract return value out of a transaction's meta XDR.
+
+    stellar-sdk 13.x no longer exposes `GetTransactionResponse.return_value`;
+    we parse `result_meta_xdr` ourselves.
+    """
+    if not result_meta_xdr:
+        return None
+    try:
+        from stellar_sdk import xdr as _xdr
+
+        meta = _xdr.TransactionMeta.from_xdr(result_meta_xdr)
+        # TransactionMetaV3 has a `soroban_meta.return_value`; v4 has a similar field.
+        for attr in ("v3", "v4"):
+            v = getattr(meta, attr, None)
+            if v is None:
+                continue
+            soroban = getattr(v, "soroban_meta", None)
+            if soroban and getattr(soroban, "return_value", None) is not None:
+                return scval.to_native(soroban.return_value)
+    except Exception as e:
+        import sys
+        print(f"[stellar.submit] meta decode failed: {e}", file=sys.stderr)
+    return None
 
 
 # ── helpers for arg encoding ────────────────────────────────────────────
