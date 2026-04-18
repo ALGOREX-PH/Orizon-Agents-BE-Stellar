@@ -21,5 +21,5 @@ async def orchestrator_execute(req: ExecuteRequest) -> ExecuteResponse:
     plan = state.plans.get(req.plan_id)
     if plan is None:
         raise HTTPException(404, f"unknown plan_id: {req.plan_id}")
-    task_id = await execute_plan(plan)
+    task_id = await execute_plan(plan, auth_id_hex=req.auth_id_hex, payer=req.payer)
     return ExecuteResponse(task_id=task_id)

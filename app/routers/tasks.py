@@ -17,3 +17,12 @@ async def get_task(task_id: str) -> Task:
     if task is None:
         raise HTTPException(404, f"unknown task: {task_id}")
     return task
+
+
+@router.get("/tasks/{task_id}/artifact")
+async def get_artifact(task_id: str) -> dict:
+    """Returns the code artifact produced by the workflow, if any."""
+    task = state.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(404, f"unknown task: {task_id}")
+    return {"artifact": task.artifact, "charge_tx": task.charge_tx, "proof_tx": task.proof_tx}
