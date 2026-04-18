@@ -30,6 +30,24 @@ class Task(BaseModel):
     spent: float
     status: TaskStatus
     started: str  # human-readable ("2m ago")
+    artifact: Optional[dict] = None
+    charge_tx: Optional[str] = None
+    proof_tx: Optional[str] = None
+
+
+# ───── Artifacts ──────────────────────────────────────────
+class ArtifactFile(BaseModel):
+    path: str
+    language: str
+    content: str
+
+
+class CodeArtifact(BaseModel):
+    title: str
+    summary: str
+    files: list[ArtifactFile]
+    entry: str
+    preview_html: str
 
 
 # ───── Plans ───────────────────────────────────────────────
@@ -102,6 +120,8 @@ class DecomposeResponse(BaseModel):
 
 class ExecuteRequest(BaseModel):
     plan_id: str
+    auth_id_hex: Optional[str] = None  # 32-hex auth id from PaymentEscrow.authorize
+    payer: Optional[str] = None         # G... address of the payer (from Freighter)
 
 
 class ExecuteResponse(BaseModel):
