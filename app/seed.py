@@ -15,6 +15,8 @@ _SEED: list[tuple[str, str, list[str], float, float, str, int, bool]] = [
     ("agt_08j2", "deploy.v0",     ["deploy", "ci"],         0.031, 4.88, "offline", 12980, False),
     ("agt_09l5", "research.pro",  ["research", "citations"],0.024, 4.83, "online",   9042, True),
     ("agt_10b6", "translate.42",  ["i18n", "42 langs"],     0.007, 4.90, "online",  41200, False),
+    ("agt_11c0", "code.gen",      ["code", "html", "js", "build"],
+                                                             0.054, 4.89, "online",   3021, True),
 ]
 
 
