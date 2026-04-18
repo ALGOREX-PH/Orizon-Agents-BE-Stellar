@@ -36,6 +36,10 @@ Rules:
 - Inline ALL JavaScript inside a <script> tag before </body>. No CDNs, no imports.
 - No build step, no frameworks that require compilation.
 - Use modern vanilla JS (ES2020+). DOM APIs only.
+- Include <meta name="viewport" content="width=device-width,initial-scale=1">.
+- The <html> and <body> must fill the viewport: html,body{height:100%;margin:0}.
+- Center the app horizontally AND vertically in the viewport using flexbox on
+  body, so it looks right in a narrow iframe (not just full window).
 - Default to a tasteful DARK UI (deep bg, neon violet/cyan accents) unless the
   user asks for something else. Rounded corners, subtle shadows, mono font for
   numeric displays.
