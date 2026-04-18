@@ -72,7 +72,7 @@ class StoredPlan(BaseModel):
 
 
 # ───── Trace ───────────────────────────────────────────────
-TraceLevel = Literal["input", "exec", "proof", "cost", "out", "error"]
+TraceLevel = Literal["input", "exec", "proof", "cost", "out", "error", "artifact"]
 
 
 class TraceLine(BaseModel):
