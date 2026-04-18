@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .workers.base import Worker
+from .workers.code_gen import CodeGen
 from .workers.copywrite import Copywrite
 from .workers.mock import MockWorker
 from .workers.research_pro import ResearchPro
@@ -13,6 +14,7 @@ _REAL: list[Worker] = [
     SeoBrief(),      # agt_05x7 seo.brief
     ResearchPro(),   # agt_09l5 research.pro
     SolAudit(),      # agt_04m1 sol-audit
+    CodeGen(),       # agt_11c0 code.gen
 ]
 
 # Mock workers for the remaining agents in the registry
