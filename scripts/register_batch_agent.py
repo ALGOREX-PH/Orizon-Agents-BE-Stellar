@@ -18,7 +18,7 @@ from pathlib import Path
 # let `import app.*` work when run as a standalone script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from stellar_sdk import Keypair, scval as _sv
+from stellar_sdk import scval as _sv
 
 from app.config import settings
 from app.stellar import client as sc
@@ -28,7 +28,8 @@ def main() -> None:
     if not settings.stellar_signing_key:
         raise SystemExit("STELLAR_SIGNING_KEY is empty — set it in .env first")
 
-    admin = Keypair.from_secret(settings.stellar_signing_key).public_key
+    # Use the helper that accepts both S… and mnemonic formats
+    admin = sc._signer_keypair().public_key
     print(f"admin: {admin}")
     print(f"registry: {sc.contract_ids().agent_registry}")
 

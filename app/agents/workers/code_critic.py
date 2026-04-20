@@ -68,13 +68,13 @@ Return a CodeArtifact with the SAME structure as the draft:
 
 
 def _build_critic() -> Agent:
+    # See note in code_gen.py — reasoning models reject reasoning_effort /
+    # temperature on Chat Completions. Let the model default.
     return Agent(
         name="code.critic",
         model=OpenAIChat(
             id=settings.worker_model,
             api_key=settings.openai_api_key,
-            reasoning_effort=settings.code_reasoning_effort,
-            temperature=settings.code_temperature,
         ),
         instructions=INSTRUCTIONS,
         output_schema=CodeArtifact,
