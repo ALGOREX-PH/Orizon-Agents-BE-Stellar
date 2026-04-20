@@ -26,6 +26,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    # Accept every Vercel preview / production domain without needing to
+    # re-list them in CORS_ORIGINS. Tighten this regex once the final prod
+    # subdomain is known (e.g. r"^https://orizon-agents(-.*)?\.vercel\.app$").
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
