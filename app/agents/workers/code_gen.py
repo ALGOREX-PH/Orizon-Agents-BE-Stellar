@@ -121,31 +121,84 @@ class CodeGen(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="code.gen",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=OpenAIChat(
+                id=settings.worker_model,
+                api_key=settings.openai_api_key,
+                reasoning_effort=settings.code_reasoning_effort,
+                temperature=settings.code_temperature,
+            ),
             instructions=INSTRUCTIONS,
             output_schema=CodeArtifact,
         )
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the CodeArtifact."
-        result = await self._agent.arun(prompt)
-        out: CodeArtifact = result.content  # type: ignore[assignment]
-
-        # If the model forgot to populate preview_html, fall back to entry file content.
+    def _artifact_dict(self, out: CodeArtifact) -> dict[str, Any]:
         preview = out.preview_html
         if not preview.strip():
             entry_file = next((f for f in out.files if f.path == out.entry), out.files[0])
             preview = entry_file.content
-
-        artifact = {
+        return {
             "title": out.title,
             "summary": out.summary,
             "files": [f.model_dump() for f in out.files],
             "entry": out.entry,
             "preview_html": preview,
         }
+
+    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+        # Lazy import — avoids a hard dependency cycle between code_gen ↔ code_critic
+        # at module-load time (code_critic re-imports CodeArtifact from here).
+        from .code_critic import CodeCritic
+        from .code_validator import validate_html
+
+        # ── 1. Draft ───────────────────────────────────────────────────
+        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the CodeArtifact."
+        result = await self._agent.arun(prompt)
+        draft: CodeArtifact = result.content  # type: ignore[assignment]
+        draft_art = self._artifact_dict(draft)
+        draft_html = draft_art["preview_html"]
+
+        # ── 2. Validate ────────────────────────────────────────────────
+        violations = validate_html(draft_html)
+
+        # ── 3. Critic refinement (always runs — even with 0 violations,
+        #     the critic pushes the output from "senior draft" to "shipped") ─
+        critic_notes: list[str] = []
+        final_art = draft_art
+        try:
+            critic = CodeCritic()
+            revised = await critic.refine(
+                intent=intent,
+                rationale=rationale,
+                draft_html=draft_html,
+                violations=violations,
+            )
+            revised_html = revised["preview_html"]
+            post_violations = validate_html(revised_html)
+            if post_violations and len(post_violations) >= len(violations):
+                # Critic didn't actually improve things — fall back to draft.
+                critic_notes.append(
+                    f"critic skipped: {len(post_violations)} remaining violations"
+                )
+            else:
+                draft_lines = draft_html.count("\n")
+                revised_lines = revised_html.count("\n")
+                delta = revised_lines - draft_lines
+                critic_notes.append(
+                    f"draft {draft_lines}L → revised {revised_lines}L ({'+' if delta >= 0 else ''}{delta})"
+                )
+                final_art = revised
+        except Exception as e:  # pragma: no cover — never fail the whole workflow
+            critic_notes.append(f"critic failed: {type(e).__name__}: {str(e)[:80]}")
+
+        final_bytes = sum(len(f["content"]) for f in final_art["files"])
         return {
-            "summary": out.title + " — " + out.summary,
-            "artifact": artifact,
-            "counts": {"files": len(out.files), "bytes": sum(len(f.content) for f in out.files)},
+            "summary": final_art["title"] + " — " + final_art["summary"],
+            "artifact": final_art,
+            "counts": {
+                "files": len(final_art["files"]),
+                "bytes": final_bytes,
+                "notes": critic_notes,
+            },
+            "critic_violations": violations,
+            "critic_notes": critic_notes,
         }
