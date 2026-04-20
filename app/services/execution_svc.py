@@ -221,7 +221,7 @@ async def _settle_onchain(
         return (None, None)
 
     try:
-        settler = Keypair.from_secret(settings.stellar_signing_key).public_key
+        settler = sc._signer_keypair().public_key
         auth_id = bytes.fromhex(auth_id_hex)
         job_id = secrets.token_bytes(16)
 
