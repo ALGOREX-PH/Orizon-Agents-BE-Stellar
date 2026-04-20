@@ -23,9 +23,9 @@ services:
 
       # ── Models ──────────────────────────────────────────────────────────
       - key: ORCHESTRATOR_MODEL
-        value: gpt-5
+        value: gpt-5.4-2026-03-05
       - key: WORKER_MODEL
-        value: gpt-5
+        value: gpt-5.4-2026-03-05
 
       # ── Stellar (testnet) ──────────────────────────────────────────────
       - key: STELLAR_NETWORK
