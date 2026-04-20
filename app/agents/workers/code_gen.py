@@ -162,13 +162,15 @@ class CodeGen(Worker):
     real = True
 
     def __init__(self) -> None:
+        # NOTE: gpt-5.3-codex (and other reasoning-class models) reject the
+        # `reasoning_effort` and `temperature` kwargs on the Chat Completions
+        # endpoint. They have their own internal reasoning knobs. Omit both
+        # and lean on the detailed prompt + two-pass critic for quality.
         self._agent = Agent(
             name="code.gen",
             model=OpenAIChat(
                 id=settings.worker_model,
                 api_key=settings.openai_api_key,
-                reasoning_effort=settings.code_reasoning_effort,
-                temperature=settings.code_temperature,
             ),
             instructions=INSTRUCTIONS,
             output_schema=CodeArtifact,
