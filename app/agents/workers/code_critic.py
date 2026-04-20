@@ -104,7 +104,7 @@ class CodeCritic:
             f"DRAFT_HTML:\n{draft_html}"
         )
         result = await self._agent.arun(prompt)
-        out: CodeArtifact = result.content  # type: ignore[assignment]
+        out = coerce_artifact(result.content)
 
         preview = out.preview_html
         if not preview.strip():
