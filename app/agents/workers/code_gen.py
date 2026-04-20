@@ -196,7 +196,7 @@ class CodeGen(Worker):
         # ── 1. Draft ───────────────────────────────────────────────────
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the CodeArtifact."
         result = await self._agent.arun(prompt)
-        draft: CodeArtifact = result.content  # type: ignore[assignment]
+        draft = coerce_artifact(result.content)
         draft_art = self._artifact_dict(draft)
         draft_html = draft_art["preview_html"]
 
