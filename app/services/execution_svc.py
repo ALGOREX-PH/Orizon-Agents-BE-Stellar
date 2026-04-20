@@ -204,7 +204,7 @@ async def _settle_onchain(
 
     Returns (charge_tx, proof_tx); either may be None if that step failed.
     """
-    from stellar_sdk import Keypair, scval as _sv
+    from stellar_sdk import scval as _sv
 
     from ..stellar import client as sc
 
