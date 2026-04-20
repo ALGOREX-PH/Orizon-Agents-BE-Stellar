@@ -100,6 +100,33 @@ def simulate_read(
     return scval.to_native(sim.results[0].xdr)
 
 
+def _signer_keypair() -> Keypair:
+    """
+    Build a Keypair from STELLAR_SIGNING_KEY, accepting either:
+      - an S… secret key (56 chars), OR
+      - a 12/24-word BIP-39 mnemonic seed phrase (words separated by spaces).
+    """
+    secret = settings.stellar_signing_key or ""
+    secret = secret.strip()
+    if not secret:
+        raise RuntimeError("STELLAR_SIGNING_KEY is empty")
+
+    words = secret.split()
+    if len(words) >= 12:
+        try:
+            return Keypair.from_mnemonic_phrase(" ".join(words))
+        except Exception as e:
+            raise RuntimeError(
+                f"STELLAR_SIGNING_KEY looks like a mnemonic but is invalid: {e}"
+            ) from e
+    try:
+        return Keypair.from_secret(secret)
+    except Exception as e:
+        raise RuntimeError(
+            f"STELLAR_SIGNING_KEY must be an S… secret or a 12/24-word mnemonic ({e})"
+        ) from e
+
+
 # ── writes (backend-signed) ─────────────────────────────────────────────
 def invoke_with_server_key(
     contract_id: str,
@@ -107,10 +134,7 @@ def invoke_with_server_key(
     args: list[Any],
 ) -> dict[str, Any]:
     """Sign + submit a contract invocation with the backend's STELLAR_SIGNING_KEY."""
-    secret = settings.stellar_signing_key
-    if not secret:
-        raise RuntimeError("STELLAR_SIGNING_KEY is empty")
-    kp = Keypair.from_secret(secret)
+    kp = _signer_keypair()
     server = _server()
     account = server.load_account(kp.public_key)
 
