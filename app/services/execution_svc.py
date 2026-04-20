@@ -127,6 +127,21 @@ async def _run(
                 )
             await _emit(task_id, start, "out", f"{worker.name}: {_summarize(output)}")
 
+            # Surface two-pass (gen → critic) activity if the worker reports it.
+            if isinstance(output, dict):
+                violations = output.get("critic_violations") or []
+                notes = output.get("critic_notes") or []
+                if violations or notes:
+                    await _emit(
+                        task_id,
+                        start,
+                        "exec",
+                        f"code.critic: refining draft ({len(violations)} violation{'' if len(violations) == 1 else 's'} flagged)",
+                    )
+                    if notes:
+                        joined = " · ".join(notes)[:140]
+                        await _emit(task_id, start, "out", f"code.critic: {joined}")
+
             # Capture artifact if the worker returned one
             art = output.get("artifact") if isinstance(output, dict) else None
             if art:
