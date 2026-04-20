@@ -105,8 +105,10 @@ async def _run(
             )
 
             try:
+                # 120s ceiling — gpt-5.3-codex producing a 400–700 line artifact
+                # can legitimately take 30-90s. Enough headroom, still bounded.
                 output = await asyncio.wait_for(
-                    worker.run(plan.intent, step.rationale), timeout=60.0
+                    worker.run(plan.intent, step.rationale), timeout=120.0
                 )
             except asyncio.TimeoutError:
                 await _emit(task_id, start, "error", f"{worker.name} timed out")
