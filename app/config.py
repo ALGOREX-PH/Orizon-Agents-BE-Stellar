@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     orchestrator_model: str = "gpt-4o-mini"
     worker_model: str = "gpt-4o-mini"
 
+    # ── Code-generation quality dials (code.gen + code.critic) ─
+    # Higher reasoning = better artifacts, more latency + cost.
+    # Valid: "low" | "medium" | "high" | "xhigh".
+    code_reasoning_effort: str = "high"
+    code_temperature: float = 0.3
+
     # ── HTTP / CORS ───────────────────────────────────────────
     cors_origins: str = "http://localhost:3000"
     port: int = 8000
