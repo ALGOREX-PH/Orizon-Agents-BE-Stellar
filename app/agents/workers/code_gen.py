@@ -26,6 +26,49 @@ class CodeArtifact(BaseModel):
     )
 
 
+def coerce_artifact(content: Any) -> CodeArtifact:
+    """
+    Accept either a CodeArtifact instance, a dict, or a JSON string and
+    return a CodeArtifact.
+
+    gpt-5.3-codex + Agno sometimes hands back content as a raw JSON string
+    (or a string wrapped in ```json fences``` from the reasoning model's
+    draft format) rather than as a parsed Pydantic object. This normalises
+    both shapes without failing the workflow.
+    """
+    import json
+    import re
+
+    if isinstance(content, CodeArtifact):
+        return content
+    if isinstance(content, dict):
+        return CodeArtifact.model_validate(content)
+    if isinstance(content, str):
+        s = content.strip()
+        # Strip ```json ... ``` or ``` ... ``` fences if present
+        fence = re.match(r"^```(?:json)?\s*\n?(.*?)\n?```$", s, re.DOTALL)
+        if fence:
+            s = fence.group(1).strip()
+        # Try direct JSON parse
+        try:
+            return CodeArtifact.model_validate_json(s)
+        except Exception:
+            pass
+        # Try to find the first balanced JSON object in the string
+        m = re.search(r"\{.*\}", s, re.DOTALL)
+        if m:
+            try:
+                return CodeArtifact.model_validate(json.loads(m.group(0)))
+            except Exception as e:
+                raise ValueError(
+                    f"code.gen returned unparseable JSON: {str(e)[:160]}"
+                ) from e
+        raise ValueError(
+            f"code.gen returned a string without JSON object (first 160 chars): {s[:160]}"
+        )
+    raise TypeError(f"unexpected code.gen content type: {type(content).__name__}")
+
+
 INSTRUCTIONS = """You are Orizon's code-generation agent — the best coding agent in the
 network. Your output must feel like something shipped by a senior product
 engineer at a design-led studio, not a demo.
@@ -153,7 +196,7 @@ class CodeGen(Worker):
         # ── 1. Draft ───────────────────────────────────────────────────
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the CodeArtifact."
         result = await self._agent.arun(prompt)
-        draft: CodeArtifact = result.content  # type: ignore[assignment]
+        draft = coerce_artifact(result.content)
         draft_art = self._artifact_dict(draft)
         draft_html = draft_art["preview_html"]
 

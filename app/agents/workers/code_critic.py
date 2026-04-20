@@ -16,7 +16,7 @@ from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 
 from ...config import settings
-from .code_gen import CodeArtifact  # reuse schema — same contract
+from .code_gen import CodeArtifact, coerce_artifact  # reuse schema + JSON-string coercion
 
 INSTRUCTIONS = """You are Orizon's senior code reviewer.
 
@@ -104,7 +104,7 @@ class CodeCritic:
             f"DRAFT_HTML:\n{draft_html}"
         )
         result = await self._agent.arun(prompt)
-        out: CodeArtifact = result.content  # type: ignore[assignment]
+        out = coerce_artifact(result.content)
 
         preview = out.preview_html
         if not preview.strip():
