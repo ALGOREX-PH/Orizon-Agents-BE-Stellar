@@ -16,7 +16,7 @@ from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 
 from ...config import settings
-from .code_gen import CodeArtifact  # reuse schema — same contract
+from .code_gen import CodeArtifact, coerce_artifact  # reuse schema + JSON-string coercion
 
 INSTRUCTIONS = """You are Orizon's senior code reviewer.
 
