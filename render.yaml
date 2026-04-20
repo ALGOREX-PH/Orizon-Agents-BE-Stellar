@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: orizon-agents-be
+    runtime: python
+    region: oregon
+    plan: free
+    branch: main
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # ── Secrets — set these in the Render dashboard, never in git ──────
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: STELLAR_SIGNING_KEY
+        sync: false
+
+      # ── HTTP ────────────────────────────────────────────────────────────
+      - key: CORS_ORIGINS
+        value: http://localhost:3000    # replace with your Vercel URL after first FE deploy
+
+      # ── Models ──────────────────────────────────────────────────────────
+      - key: ORCHESTRATOR_MODEL
+        value: gpt-5
+      - key: WORKER_MODEL
+        value: gpt-5
+
+      # ── Stellar (testnet) ──────────────────────────────────────────────
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: STELLAR_RPC_URL
+        value: https://soroban-testnet.stellar.org
+      - key: STELLAR_NETWORK_PASSPHRASE
+        value: "Test SDF Network ; September 2015"
+      - key: STELLAR_AGENT_REGISTRY
+        value: CDYA6J67BUIFHDJDBGXIJYKCCXN4Y6MPY5AV6FXIYNL4A5HDHA2QL2JP
+      - key: STELLAR_REPUTATION_LEDGER
+        value: CBLCRH6V4KOVA2CRISGWGDKQLSZJHW43DWDXZBLA4BROOWQPUKLNRKUO
+      - key: STELLAR_PAYMENT_ESCROW
+        value: CD6XFSPJQYSO4HPERL3K3DKEQ3HJC7KN6PHKBQMCZR2LSW6DWXIFTW6H
+      - key: STELLAR_ATTESTATION_REGISTRY
+        value: CBK5NXVIDTPNGVPFZGOXHRKMV4TEXNOAHFF2PARIYYIVROCLXURYYPVP
+      - key: STELLAR_ASSET_SAC
+        value: CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+      - key: STELLAR_ADMIN_ADDRESS
+        value: GCO4EYZFPFKAXDFQFNG3MVCCK6VEJ2XYODYZCNKSJOWHG6PEDWLAKVGY
