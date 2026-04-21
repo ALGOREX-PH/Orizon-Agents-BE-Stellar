@@ -2,13 +2,17 @@
 
 FastAPI + Agno + OpenAI. The brain behind the Orizon Agents frontend.
 
-## Repositories
+## 🚀 Live deployment
 
-| layer | repo |
-| --- | --- |
-| Backend (this repo) | https://github.com/ALGOREX-PH/Orizon-Agents-BE-Stellar |
-| Frontend — Next.js | https://github.com/ALGOREX-PH/Orizon-Agents-FE-Stellar |
-| Smart Contracts — Soroban / Rust | https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar |
+| layer | live URL | source |
+| --- | --- | --- |
+| ⚙️ **Backend** (this repo, Render) | **https://orizon-agents-be-stellar.onrender.com** | this repo |
+| 🌐 **Frontend** (Vercel) | **https://orizon-agents-fe-stellar.vercel.app** | [Frontend repo](https://github.com/ALGOREX-PH/Orizon-Agents-FE-Stellar) |
+| 🔗 **Soroban contracts** | 4 contracts deployed on Stellar **testnet** | [Contracts repo](https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar) |
+
+**Verify it's live:** `curl https://orizon-agents-be-stellar.onrender.com/api/stellar/network` — returns the four testnet contract IDs the FE renders.
+
+**▸ Try the full flow:** [open the dApp](https://orizon-agents-fe-stellar.vercel.app/app/orchestrator) → connect [Freighter](https://freighter.app) on **Test Net** → type `code a calculator web app` → **Authorize & Execute**.
 
 ## Setup
 
