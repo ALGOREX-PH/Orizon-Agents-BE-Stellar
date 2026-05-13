@@ -99,4 +99,5 @@ Polish:
 - On eat: brief radial flash at the eaten cell. Bonus eat = magenta flash + double-frequency beep.
 - Game over: dim the playfield, show a score card with "name?" 3-char input → leaderboard.""",
     expected_min_lines=450,
+    artifact_path="snake.html",
 )

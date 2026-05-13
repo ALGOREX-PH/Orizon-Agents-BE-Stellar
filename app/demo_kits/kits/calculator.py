@@ -95,4 +95,5 @@ Polish:
 - Auto-shrink display font (clamp from 48px down to 24px) as expression grows.
 - Memory badge appears in the top-right when memory is non-zero.""",
     expected_min_lines=500,
+    artifact_path="calculator.html",
 )

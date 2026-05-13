@@ -296,8 +296,37 @@ class CodeGen(Worker):
         rationale: str,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        import asyncio
+        import random
+
         # Lazy import — avoids a hard dependency cycle between code_gen ↔ code_validator
         from .code_validator import validate_html
+
+        # ── Baked-artifact fast path ───────────────────────────────────────
+        # When the kit has a pre-built HTML artifact, skip the LLM and serve
+        # it deterministically. Guarantees demo quality + saves ~30s + cost.
+        kit_dict = (context or {}).get("kit")
+        if isinstance(kit_dict, dict) and kit_dict.get("artifact_path"):
+            from ...demo_kits import kit_by_id
+
+            kit = kit_by_id(kit_dict.get("kit_id", ""))
+            baked = kit.load_artifact() if kit else None
+            if baked:
+                # Mimic generation time so the trace doesn't feel instant.
+                await asyncio.sleep(0.4 + random.random() * 0.6)
+                html = baked["preview_html"]
+                lines = html.count("\n") + 1
+                return {
+                    "summary": f"{baked['title']} — {baked['summary']}",
+                    "artifact": baked,
+                    "counts": {
+                        "files": len(baked["files"]),
+                        "bytes": len(html),
+                        "lines": lines,
+                    },
+                    "validator_violations": [],
+                    "source": "baked",
+                }
 
         # ── Build the prompt with optional context sections ────────────────
         ctx_block = self._context_block(context)

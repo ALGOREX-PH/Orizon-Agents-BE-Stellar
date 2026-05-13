@@ -96,4 +96,5 @@ Polish:
 - Tomato counter is a single large number with a tiny "🍅" SVG glyph beside it (or an inline tomato SVG — never an emoji image).
 - Phase transitions briefly flash the background tint of the next phase.""",
     expected_min_lines=400,
+    artifact_path="pomodoro.html",
 )

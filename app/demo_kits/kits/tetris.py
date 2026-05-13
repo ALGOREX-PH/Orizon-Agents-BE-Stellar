@@ -103,4 +103,5 @@ Visual polish:
 - Line clear: row flashes white for 200ms then rows above fall.
 - T-spin / Tetris: brief score popup floats up from the cleared row.""",
     expected_min_lines=700,
+    artifact_path="tetris.html",
 )

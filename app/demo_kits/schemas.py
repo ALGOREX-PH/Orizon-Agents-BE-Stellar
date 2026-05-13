@@ -6,6 +6,9 @@ feeds a deterministic 6-step plan with a guaranteed-quality artifact.
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -65,9 +68,37 @@ class DemoKit(BaseModel):
     critic_checklist: list[str] = Field(..., min_length=4)
     code_gen_addendum: str
     expected_min_lines: int = 400
+    # File under demo_kits/artifacts/ — when set, the pipeline serves this
+    # baked HTML instead of asking the LLM to generate one.
+    artifact_path: str | None = None
 
     def feature_brief(self) -> str:
         return "\n".join(f"- {f.label}: {f.detail}" for f in self.features)
 
     def critic_block(self) -> str:
         return "\n".join(f"- {c}" for c in self.critic_checklist)
+
+    def load_artifact(self) -> dict[str, Any] | None:
+        """Read the baked HTML file and return a CodeArtifact-shaped dict.
+
+        Returns None if `artifact_path` is unset or the file doesn't exist.
+        The returned dict matches the shape `code.gen` produces and is
+        consumed by the trace UI's artifact iframe.
+        """
+        if not self.artifact_path:
+            return None
+        p = Path(__file__).parent / "artifacts" / self.artifact_path
+        if not p.is_file():
+            return None
+        html = p.read_text(encoding="utf-8")
+        return {
+            "title": self.brand.name,
+            "summary": self.brand.tagline,
+            "files": [
+                {"path": "index.html", "language": "html", "content": html}
+            ],
+            "entry": "index.html",
+            "preview_html": html,
+            "source": "baked",
+            "kit_id": self.kit_id,
+        }
