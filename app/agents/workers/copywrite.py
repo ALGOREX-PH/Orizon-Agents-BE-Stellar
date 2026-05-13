@@ -38,7 +38,12 @@ class Copywrite(Worker):
             output_schema=CopyOutput,
         )
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nDraft the copy."
         result = await self._agent.arun(prompt)
         out: CopyOutput = result.content  # type: ignore[assignment]

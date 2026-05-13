@@ -14,7 +14,12 @@ class MockWorker(Worker):
         self.id = id_
         self.name = name
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         await asyncio.sleep(0.2 + random.random() * 0.4)
         return {
             "summary": f"{self.name} simulated output for intent",
