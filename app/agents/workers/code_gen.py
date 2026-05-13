@@ -95,10 +95,12 @@ and opening it in a browser — zero build step, zero network calls.
    shortcut live, every calculation correct, every timer tick precise,
    every game playable. If you would show a placeholder in a mockup, build
    the real thing instead.
+6. NEVER use JavaScript `eval()` or `new Function()`. Real parsers only.
 
 # Quality bar — state of the art
 
 - **Depth over minimalism.** Ship a feature-complete app, not a toy.
+  Default examples (override if the user prompt is more specific):
   - Calculator: basic + scientific ops, keyboard support, history panel,
     copy-to-clipboard on result, memory (M+, M-, MR, MC), theme toggle.
   - Pomodoro: work/short break/long break cycles, configurable durations,
@@ -112,12 +114,10 @@ and opening it in a browser — zero build step, zero network calls.
   - Landing page: hero, feature grid with real copy, pricing / CTA, testimonial,
     FAQ (accessible `<details>`), subtle parallax, scroll-linked reveal.
 
-- **Design.** Tasteful dark UI by default unless the intent asks otherwise.
-  Use a small design-system in CSS variables:
-  `--bg, --surface, --surface-2, --border, --text, --muted, --accent,
-   --accent-2, --radius, --shadow, --easing`. Include a 200ms ease curve for
-  transitions. Accent with a single gradient (violet → cyan is on-brand).
-  Elevation via `box-shadow` + `backdrop-filter: blur(12px)` where it fits.
+- **Design.** Tasteful UI grounded in the DESIGN TOKENS (if provided in the
+  prompt). Use a small design-system in CSS variables matching the supplied
+  palette. Include a 200ms ease curve for transitions. Elevation via
+  `box-shadow` + `backdrop-filter: blur(12px)` where it fits.
 
 - **Motion.** Every interactive element has a transition (≤ 200ms). Entry
   animations via `@keyframes` when appropriate. Respect
@@ -139,15 +139,32 @@ and opening it in a browser — zero build step, zero network calls.
   helpers for formatting. Use `dataset` instead of class toggling for state.
   Small, readable functions with descriptive names.
 
+# Using the upstream context
+
+When the prompt includes BRAND / FEATURES / DESIGN_TOKENS sections, treat them
+as **non-negotiable**:
+- Use the BRAND name as the artifact `title`.
+- Implement EVERY feature listed in FEATURES (do not collapse or skip).
+- Use the DESIGN_TOKENS palette as the literal CSS variable values — copy the
+  `:root { --bg: …; --primary: …; }` block verbatim.
+- Use the DESIGN_TOKENS family_ui and family_display as the actual `font-family`
+  declarations.
+
+A KIT_NOTES section (when present) is the technical playbook for the build —
+follow its recommended structure, key handlers, and visual polish notes
+closely. The kit notes were written by a senior engineer who knows what the
+shipping version looks like.
+
 # Length target
 
-~400–700 lines of well-commented, production-quality code. Favor depth and
-polish over brevity; do not pad.
+For curated demo intents (kit context present), aim for **600–1000 lines** of
+production-quality code — the kit deserves polish. For free-form intents,
+**400–700 lines** is the sweet spot.
 
 # OUTPUT SHAPE
 
 Return a CodeArtifact with:
-- `title`: confident product-style name — "Pulse Pomodoro", "Aurora Calc".
+- `title`: confident product-style name. Use the brand name if provided.
 - `summary`: one punchy sentence describing what it does + the one thing
   that makes it feel premium.
 - `files`: single entry `{path: "index.html", language: "html", content: <full HTML>}`.
@@ -165,7 +182,8 @@ class CodeGen(Worker):
         # NOTE: gpt-5.3-codex (and other reasoning-class models) reject the
         # `reasoning_effort` and `temperature` kwargs on the Chat Completions
         # endpoint. They have their own internal reasoning knobs. Omit both
-        # and lean on the detailed prompt + two-pass critic for quality.
+        # and lean on the detailed prompt for quality. The polish pass now
+        # runs as a separate top-level `code.critic` step in the pipeline.
         self._agent = Agent(
             name="code.gen",
             model=OpenAIChat(
@@ -189,61 +207,128 @@ class CodeGen(Worker):
             "preview_html": preview,
         }
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
-        # Lazy import — avoids a hard dependency cycle between code_gen ↔ code_critic
-        # at module-load time (code_critic re-imports CodeArtifact from here).
-        from .code_critic import CodeCritic
+    @staticmethod
+    def _context_block(context: dict[str, Any] | None) -> str:
+        """Format prior step outputs as plain-text sections to splice into the
+        prompt. Each section is opt-in: missing pieces are silently skipped."""
+        if not context:
+            return ""
+
+        parts: list[str] = []
+
+        kit = context.get("kit")
+        if isinstance(kit, dict):
+            brand = kit.get("brand", {}) or {}
+            parts.append(
+                "## BRAND\n"
+                f"- name: {brand.get('name', '')}\n"
+                f"- tagline: {brand.get('tagline', '')}\n"
+                f"- audience: {', '.join(brand.get('audience', []))}"
+            )
+            features = kit.get("features", []) or []
+            if features:
+                lines = "\n".join(
+                    f"- {f['label']}: {f['detail']}" for f in features
+                )
+                parts.append(f"## FEATURES (implement every one)\n{lines}")
+
+            addendum = kit.get("code_gen_addendum") or ""
+            if addendum:
+                parts.append(f"## KIT_NOTES\n{addendum}")
+
+            min_lines = kit.get("expected_min_lines")
+            if min_lines:
+                parts.append(
+                    f"## LENGTH_TARGET\nProduce at least {min_lines} lines of "
+                    "production code; favor depth over brevity."
+                )
+
+        # Brand from seo.brief (only used if no kit was present)
+        seo = context.get("seo.brief")
+        if isinstance(seo, dict) and "## BRAND" not in "\n".join(parts):
+            brand_name = seo.get("brand_name") or ""
+            tagline = seo.get("tagline") or ""
+            audiences = seo.get("audiences", []) or []
+            if brand_name or tagline:
+                parts.append(
+                    "## BRAND\n"
+                    f"- name: {brand_name}\n"
+                    f"- tagline: {tagline}\n"
+                    f"- audience: {', '.join(audiences)}"
+                )
+
+        # Feature brief from research.pro (only used if no kit features in prompt)
+        research = context.get("research.pro")
+        if (
+            isinstance(research, dict)
+            and "## FEATURES" not in "\n".join(parts)
+        ):
+            findings = research.get("findings", []) or []
+            if findings:
+                lines = "\n".join(
+                    f"- {f.get('claim', '')}" for f in findings[:8]
+                )
+                parts.append(f"## FEATURES (research-derived)\n{lines}")
+
+        # Design tokens from design.figma
+        design = context.get("design.figma")
+        if isinstance(design, dict):
+            css = design.get("css_vars") or ""
+            typo = design.get("typography", {}) or {}
+            family_ui = typo.get("family_ui", "")
+            family_display = typo.get("family_display", "")
+            block = "## DESIGN_TOKENS\n"
+            if css:
+                block += f"Copy this :root block into your CSS verbatim:\n```\n{css}\n```\n"
+            if family_ui or family_display:
+                block += (
+                    f"Font stacks:\n"
+                    f"- family_ui: {family_ui}\n"
+                    f"- family_display: {family_display}\n"
+                )
+            parts.append(block.rstrip())
+
+        return "\n\n".join(parts)
+
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        # Lazy import — avoids a hard dependency cycle between code_gen ↔ code_validator
         from .code_validator import validate_html
 
-        # ── 1. Draft ───────────────────────────────────────────────────
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the CodeArtifact."
+        # ── Build the prompt with optional context sections ────────────────
+        ctx_block = self._context_block(context)
+        prompt_parts = [
+            f"INTENT: {intent}",
+            f"RATIONALE: {rationale}",
+        ]
+        if ctx_block:
+            prompt_parts.append(ctx_block)
+        prompt_parts.append("Return the CodeArtifact.")
+        prompt = "\n\n".join(prompt_parts)
+
+        # ── Draft ──────────────────────────────────────────────────────────
         result = await self._agent.arun(prompt)
         draft = coerce_artifact(result.content)
         draft_art = self._artifact_dict(draft)
-        draft_html = draft_art["preview_html"]
 
-        # ── 2. Validate ────────────────────────────────────────────────
-        violations = validate_html(draft_html)
+        # ── Validate (no critic here — critic runs as a separate pipeline step) ─
+        violations = validate_html(draft_art["preview_html"])
 
-        # ── 3. Critic refinement (always runs — even with 0 violations,
-        #     the critic pushes the output from "senior draft" to "shipped") ─
-        critic_notes: list[str] = []
-        final_art = draft_art
-        try:
-            critic = CodeCritic()
-            revised = await critic.refine(
-                intent=intent,
-                rationale=rationale,
-                draft_html=draft_html,
-                violations=violations,
-            )
-            revised_html = revised["preview_html"]
-            post_violations = validate_html(revised_html)
-            if post_violations and len(post_violations) >= len(violations):
-                # Critic didn't actually improve things — fall back to draft.
-                critic_notes.append(
-                    f"critic skipped: {len(post_violations)} remaining violations"
-                )
-            else:
-                draft_lines = draft_html.count("\n")
-                revised_lines = revised_html.count("\n")
-                delta = revised_lines - draft_lines
-                critic_notes.append(
-                    f"draft {draft_lines}L → revised {revised_lines}L ({'+' if delta >= 0 else ''}{delta})"
-                )
-                final_art = revised
-        except Exception as e:  # pragma: no cover — never fail the whole workflow
-            critic_notes.append(f"critic failed: {type(e).__name__}: {str(e)[:80]}")
-
-        final_bytes = sum(len(f["content"]) for f in final_art["files"])
+        final_bytes = sum(len(f["content"]) for f in draft_art["files"])
+        final_lines = sum(f["content"].count("\n") + 1 for f in draft_art["files"])
         return {
-            "summary": final_art["title"] + " — " + final_art["summary"],
-            "artifact": final_art,
+            "summary": draft_art["title"] + " — " + draft_art["summary"],
+            "artifact": draft_art,
             "counts": {
-                "files": len(final_art["files"]),
+                "files": len(draft_art["files"]),
                 "bytes": final_bytes,
-                "notes": critic_notes,
+                "lines": final_lines,
             },
-            "critic_violations": violations,
-            "critic_notes": critic_notes,
+            # Surface validator-detected issues so the next step (code.critic)
+            # — and the trace log — can act on them.
+            "validator_violations": violations,
         }
