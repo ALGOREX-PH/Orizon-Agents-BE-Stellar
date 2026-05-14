@@ -4,10 +4,11 @@ import asyncio
 import hashlib
 import secrets
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from ..agents.registry import get_worker
 from ..config import settings
+from ..demo_kits import detect_kit
 from ..schemas import StoredPlan, Task, TraceLine, TraceLevel
 from ..state import state
 from ..trace_bus import bus
@@ -29,7 +30,7 @@ async def _emit(task_id: str, start: float, level: TraceLevel, msg: str) -> Trac
 
 def _summarize(output: dict) -> str:
     if "summary" in output:
-        return str(output["summary"])[:140]
+        return str(output["summary"])[:180]
     counts = output.get("counts")
     if isinstance(counts, dict):
         return ", ".join(f"{k}={v}" for k, v in counts.items())
@@ -75,8 +76,25 @@ async def _run(
     last_artifact: Optional[dict] = None
     onchain = bool(auth_id_hex and payer)
 
+    # Accumulate prior step outputs so later steps can build on them.
+    # The kit (if any) is seeded into context up-front so EVERY worker
+    # in the pipeline can short-circuit deterministically.
+    kit = detect_kit(plan.intent)
+    context: dict[str, Any] = {
+        "kit": kit.model_dump() if kit is not None else None,
+        "intent": plan.intent,
+    }
+
     try:
         await _emit(task_id, start, "input", f"intent received → '{plan.intent}'")
+        if kit is not None:
+            await _emit(
+                task_id,
+                start,
+                "exec",
+                f"kit detected: {kit.kit_id} → {kit.brand.name} "
+                f"({len(kit.features)} features locked)",
+            )
         await _emit(
             task_id,
             start,
@@ -105,10 +123,11 @@ async def _run(
             )
 
             try:
-                # 120s ceiling — gpt-5.3-codex producing a 400–700 line artifact
-                # can legitimately take 30-90s. Enough headroom, still bounded.
+                # 120s ceiling — gpt-5.3-codex producing a 600–1000 line artifact
+                # can legitimately take 30–90s. Enough headroom, still bounded.
                 output = await asyncio.wait_for(
-                    worker.run(plan.intent, step.rationale), timeout=120.0
+                    worker.run(plan.intent, step.rationale, context=context),
+                    timeout=120.0,
                 )
             except asyncio.TimeoutError:
                 await _emit(task_id, start, "error", f"{worker.name} timed out")
@@ -127,33 +146,45 @@ async def _run(
                 )
             await _emit(task_id, start, "out", f"{worker.name}: {_summarize(output)}")
 
-            # Surface two-pass (gen → critic) activity if the worker reports it.
+            # Surface critic notes / violations if the worker reports them.
             if isinstance(output, dict):
                 violations = output.get("critic_violations") or []
                 notes = output.get("critic_notes") or []
-                if violations or notes:
+                if notes:
+                    joined = " · ".join(notes)[:180]
+                    await _emit(task_id, start, "exec", f"{worker.name}: {joined}")
+                # Some workers (deploy.v0) attach a synthetic preview URL —
+                # surface it so the demo viewer sees the "ship" moment.
+                preview_url = output.get("preview_url")
+                if preview_url:
                     await _emit(
                         task_id,
                         start,
-                        "exec",
-                        f"code.critic: refining draft ({len(violations)} violation{'' if len(violations) == 1 else 's'} flagged)",
+                        "out",
+                        f"{worker.name}: preview → {preview_url}",
                     )
-                    if notes:
-                        joined = " · ".join(notes)[:140]
-                        await _emit(task_id, start, "out", f"code.critic: {joined}")
 
-            # Capture artifact if the worker returned one
+            # Capture artifact if the worker returned one. Later steps may
+            # overwrite this (e.g. code.critic refines code.gen's draft).
             art = output.get("artifact") if isinstance(output, dict) else None
             if art:
                 last_artifact = art
                 title = art.get("title", "artifact")
                 files = art.get("files", [])
+                total_bytes = sum(len(f.get("content", "")) for f in files)
+                total_lines = sum(f.get("content", "").count("\n") + 1 for f in files)
                 await _emit(
                     task_id,
                     start,
                     "artifact",
-                    f"▣ {title} — {len(files)} file(s) · {sum(len(f.get('content', '')) for f in files)} bytes",
+                    f"▣ {title} — {len(files)} file(s) · "
+                    f"{total_lines:,} lines · {total_bytes:,} bytes",
                 )
+
+            # Persist this step's output under the agent name so later workers
+            # can read it. e.g. context["code.gen"] = {...}.
+            if isinstance(output, dict):
+                context[worker.name] = output
 
         charge_tx: Optional[str] = None
         proof_tx: Optional[str] = None

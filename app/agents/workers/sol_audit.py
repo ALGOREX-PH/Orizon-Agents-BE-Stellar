@@ -43,7 +43,12 @@ class SolAudit(Worker):
             output_schema=AuditOutput,
         )
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the audit summary."
         result = await self._agent.arun(prompt)
         out: AuditOutput = result.content  # type: ignore[assignment]

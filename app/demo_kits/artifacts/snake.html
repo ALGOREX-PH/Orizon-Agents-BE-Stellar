@@ -1,0 +1,935 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIPER·GRID</title>
+<style>
+  :root {
+    --bg: #040A06;
+    --surface: #0C1810;
+    --surface-2: #15281A;
+    --border: #1F3D27;
+    --text: #E8F8EE;
+    --muted: #7AA088;
+    --primary: #3DFF85;
+    --accent: #00FFD1;
+    --danger: #FF2EC4;
+    --ease: cubic-bezier(.4,.0,.2,1);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background:
+      radial-gradient(ellipse at top, rgba(61,255,133,.10), transparent 60%),
+      radial-gradient(ellipse at bottom right, rgba(255,46,196,.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .stage {
+    display: flex;
+    gap: 20px;
+    background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px;
+    box-shadow:
+      0 30px 80px -30px rgba(0,0,0,.7),
+      0 0 60px rgba(61,255,133,.08),
+      0 0 0 1px rgba(61,255,133,.10) inset;
+    max-width: 100%;
+  }
+
+  .field {
+    position: relative;
+    width: 500px;
+    height: 500px;
+    background: #02060A;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  #board {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .panel {
+    width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .brand h1 {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    margin: 0;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .brand small { font-size: 9px; letter-spacing: 0.22em; color: var(--muted); text-transform: uppercase; }
+
+  .hud {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .stat {
+    background: rgba(0,0,0,.3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .stat label {
+    display: block;
+    font-size: 9px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .stat b {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .stat.full { grid-column: span 2; }
+
+  .row-label {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .speed-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .speed-btn {
+    appearance: none;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    transition: all 140ms var(--ease);
+  }
+  .speed-btn:hover { color: var(--text); border-color: var(--primary); }
+  .speed-btn.active {
+    background: rgba(61,255,133,.12);
+    color: var(--primary);
+    border-color: var(--primary);
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0,0,0,.3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    user-select: none;
+    transition: all 140ms var(--ease);
+  }
+  .toggle:hover { color: var(--text); }
+  .toggle .knob {
+    width: 28px;
+    height: 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    position: relative;
+    transition: background-color 200ms var(--ease);
+  }
+  .toggle .knob::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    background: var(--muted);
+    border-radius: 50%;
+    transition: transform 200ms var(--ease), background-color 200ms var(--ease);
+  }
+  .toggle.on .knob { background: rgba(61,255,133,.24); }
+  .toggle.on .knob::after { transform: translateX(12px); background: var(--primary); }
+
+  .leaderboard {
+    background: rgba(0,0,0,.25);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .leaderboard ol {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    counter-reset: rank;
+  }
+  .leaderboard li {
+    counter-increment: rank;
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    padding: 4px 0;
+  }
+  .leaderboard li::before {
+    content: counter(rank);
+    color: var(--muted);
+    font-size: 9px;
+    text-align: right;
+  }
+  .leaderboard .name { color: var(--accent); font-weight: 500; letter-spacing: 0.16em; }
+  .leaderboard .score { color: var(--text); }
+  .leaderboard .empty {
+    color: var(--muted);
+    font-size: 10px;
+    text-align: center;
+    padding: 8px 0;
+    opacity: 0.6;
+  }
+
+  .controls-hint {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .controls-hint kbd {
+    display: inline-block;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: inherit;
+    font-size: 9px;
+    color: var(--text);
+    margin-right: 3px;
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4,10,6,.92);
+    backdrop-filter: blur(6px);
+    z-index: 5;
+    border-radius: 8px;
+    padding: 24px;
+    text-align: center;
+    gap: 12px;
+    animation: fade-in 200ms var(--ease);
+  }
+  .overlay.show { display: flex; }
+  .overlay h2 {
+    font-size: 22px;
+    letter-spacing: 0.18em;
+    margin: 0;
+    color: var(--text);
+  }
+  .overlay h2.win { color: var(--primary); }
+  .overlay p {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  .overlay .stats {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 6px 18px;
+    margin: 12px 0;
+    font-size: 12px;
+  }
+  .overlay .stats span:nth-child(odd) {
+    color: var(--muted);
+    text-align: right;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-size: 10px;
+  }
+  .overlay .stats span:nth-child(even) {
+    color: var(--text);
+    text-align: left;
+  }
+  .overlay input.initials {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    text-align: center;
+    text-transform: uppercase;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px;
+    letter-spacing: 0.5em;
+    padding-left: 0.5em;
+    width: 140px;
+    border-radius: 4px;
+    padding: 8px;
+  }
+  .overlay input.initials:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .overlay button {
+    appearance: none;
+    background: rgba(61,255,133,.12);
+    border: 1px solid var(--primary);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 10px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 180ms var(--ease);
+    min-width: 140px;
+  }
+  .overlay button:hover, .overlay button:focus-visible {
+    background: rgba(61,255,133,.24);
+    box-shadow: 0 0 24px rgba(61,255,133,.32);
+    outline: none;
+  }
+
+  .start-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    color: var(--primary);
+    font-size: 14px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    background: rgba(4,10,6,.6);
+    z-index: 4;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .start-hint small { color: var(--muted); font-size: 10px; letter-spacing: 0.2em; }
+  .start-hint.hidden { display: none; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @media (max-width: 760px) {
+    .stage { flex-direction: column; padding: 14px; }
+    .field { width: min(500px, 90vw); height: min(500px, 90vw); }
+    .panel { width: min(500px, 90vw); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .start-hint { animation: none; }
+    .overlay { animation: none; }
+    * { transition-duration: 80ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="field" id="field" role="application" aria-label="VIPER·GRID playfield">
+      <canvas id="board" width="500" height="500"></canvas>
+
+      <div class="start-hint" id="start-hint">
+        <div>press any key</div>
+        <small>or tap to begin</small>
+      </div>
+
+      <div class="overlay" id="pause" aria-hidden="true">
+        <h2>◇ PAUSED</h2>
+        <p>press <kbd>␣</kbd> to resume</p>
+      </div>
+
+      <div class="overlay" id="over" aria-hidden="true">
+        <h2 id="over-title">GAME OVER</h2>
+        <div class="stats">
+          <span>score</span><span id="final-score">0</span>
+          <span>length</span><span id="final-length">3</span>
+          <span>speed</span><span id="final-speed">normal</span>
+        </div>
+        <div id="initials-block">
+          <p>enter your initials</p>
+          <input class="initials" id="initials" maxlength="3" autocomplete="off" />
+        </div>
+        <button id="restart-btn" type="button">restart · R</button>
+      </div>
+    </div>
+
+    <aside class="panel" aria-label="game info">
+      <div class="brand">
+        <h1>VIPER·GRID</h1>
+        <small>v1</small>
+      </div>
+
+      <div class="hud">
+        <div class="stat">
+          <label>score</label>
+          <b id="score">0</b>
+        </div>
+        <div class="stat">
+          <label>length</label>
+          <b id="length">3</b>
+        </div>
+        <div class="stat full">
+          <label>session best</label>
+          <b id="best">0</b>
+        </div>
+      </div>
+
+      <div>
+        <div class="row-label">speed</div>
+        <div class="speed-row" id="speed-row">
+          <button class="speed-btn" data-speed="slow" type="button">slow</button>
+          <button class="speed-btn active" data-speed="normal" type="button">normal</button>
+          <button class="speed-btn" data-speed="fast" type="button">fast</button>
+          <button class="speed-btn" data-speed="insane" type="button">insane</button>
+        </div>
+      </div>
+
+      <div class="toggle" id="wrap-toggle" role="switch" aria-checked="false" tabindex="0">
+        <span>wraparound</span>
+        <div class="knob"></div>
+      </div>
+
+      <div class="leaderboard">
+        <div class="row-label">leaderboard · top 5</div>
+        <ol id="lb"></ol>
+      </div>
+
+      <div class="controls-hint">
+        <kbd>←↑↓→</kbd> or <kbd>WASD</kbd> move<br>
+        <kbd>␣</kbd> pause · <kbd>R</kbd> restart<br>
+        swipe to steer on mobile
+      </div>
+    </aside>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ── Constants ─────────────────────────────────────────────────────────────
+  const COLS = 20, ROWS = 20, CELL = 25;
+  const SPEEDS = { slow: 200, normal: 130, fast: 90, insane: 55 };
+  const BONUS_MIN_GAP = 7000;
+  const BONUS_MAX_GAP = 12000;
+  const BONUS_DURATION = 5000;
+  const LB_KEY = 'orizon.snake.lb.v1';
+  const PREF_KEY = 'orizon.snake.prefs.v1';
+
+  const COLOR_BG = '#02060A';
+  const COLOR_GRID = 'rgba(31,61,39,0.45)';
+  const COLOR_SNAKE = '#3DFF85';
+  const COLOR_SNAKE_HEAD = '#7DFFB1';
+  const COLOR_FOOD = '#00FFD1';
+  const COLOR_BONUS = '#FF2EC4';
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const state = {
+    snake: [],
+    dir: { x: 1, y: 0 },
+    pendingDir: { x: 1, y: 0 },
+    food: null,
+    bonus: null,
+    nextBonusAt: 0,
+    score: 0,
+    best: 0,
+    length: 3,
+    paused: false,
+    over: false,
+    started: false,
+    wrap: false,
+    speed: 'normal',
+    tickHandle: null,
+    bonusTimer: null,
+    lastTickAt: 0,
+    trail: [],         // recent head positions for the glow trail
+  };
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const board = document.getElementById('board');
+  const ctx = board.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const lengthEl = document.getElementById('length');
+  const bestEl = document.getElementById('best');
+  const startHint = document.getElementById('start-hint');
+  const pauseOverlay = document.getElementById('pause');
+  const overOverlay = document.getElementById('over');
+  const overTitle = document.getElementById('over-title');
+  const finalScore = document.getElementById('final-score');
+  const finalLength = document.getElementById('final-length');
+  const finalSpeed = document.getElementById('final-speed');
+  const initialsBlock = document.getElementById('initials-block');
+  const initialsInput = document.getElementById('initials');
+  const restartBtn = document.getElementById('restart-btn');
+  const wrapToggle = document.getElementById('wrap-toggle');
+  const speedRow = document.getElementById('speed-row');
+  const lbEl = document.getElementById('lb');
+
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ── Audio (lazy AudioContext on first user gesture) ──────────────────────
+  let audioCtx = null;
+  function beep(freq, duration = 80, type = 'square') {
+    if (state.muted) return;
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { return; }
+    }
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration / 1000);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration / 1000);
+  }
+
+  // ── Pure helpers ─────────────────────────────────────────────────────────
+  function randCell() {
+    return { x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS) };
+  }
+  function occupies(snake, cell) {
+    for (const s of snake) if (s.x === cell.x && s.y === cell.y) return true;
+    return false;
+  }
+  function spawnFood() {
+    for (let i = 0; i < 80; i++) {
+      const c = randCell();
+      if (!occupies(state.snake, c)) { state.food = c; return; }
+    }
+    state.food = null;
+  }
+  function scheduleBonus() {
+    if (state.bonusTimer) clearTimeout(state.bonusTimer);
+    const gap = BONUS_MIN_GAP + Math.random() * (BONUS_MAX_GAP - BONUS_MIN_GAP);
+    state.bonusTimer = setTimeout(spawnBonus, gap);
+  }
+  function spawnBonus() {
+    for (let i = 0; i < 80; i++) {
+      const c = randCell();
+      if (!occupies(state.snake, c) && (!state.food || c.x !== state.food.x || c.y !== state.food.y)) {
+        state.bonus = { x: c.x, y: c.y, expiresAt: performance.now() + BONUS_DURATION };
+        scheduleBonus();
+        return;
+      }
+    }
+    state.bonus = null;
+    scheduleBonus();
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  function drawGrid() {
+    ctx.fillStyle = COLOR_BG;
+    ctx.fillRect(0, 0, board.width, board.height);
+    ctx.strokeStyle = COLOR_GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 1; c < COLS; c++) {
+      ctx.moveTo(c * CELL + 0.5, 0);
+      ctx.lineTo(c * CELL + 0.5, ROWS * CELL);
+    }
+    for (let r = 1; r < ROWS; r++) {
+      ctx.moveTo(0, r * CELL + 0.5);
+      ctx.lineTo(COLS * CELL, r * CELL + 0.5);
+    }
+    ctx.stroke();
+  }
+  function drawCell(x, y, color, opts = {}) {
+    const px = x * CELL, py = y * CELL;
+    const pad = opts.pad ?? 2;
+    ctx.fillStyle = color;
+    ctx.fillRect(px + pad, py + pad, CELL - pad * 2, CELL - pad * 2);
+    if (opts.glow && !reducedMotion) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 12;
+      ctx.fillRect(px + pad, py + pad, CELL - pad * 2, CELL - pad * 2);
+      ctx.shadowBlur = 0;
+    }
+  }
+  function drawSnake() {
+    // Body — gradient from primary to slightly dimmer at the tail.
+    for (let i = state.snake.length - 1; i >= 1; i--) {
+      const s = state.snake[i];
+      const alpha = 0.45 + 0.45 * (i / state.snake.length);
+      ctx.fillStyle = `rgba(61,255,133,${alpha})`;
+      ctx.fillRect(s.x * CELL + 3, s.y * CELL + 3, CELL - 6, CELL - 6);
+    }
+    // Head
+    if (state.snake.length) {
+      const h = state.snake[0];
+      ctx.fillStyle = COLOR_SNAKE_HEAD;
+      ctx.fillRect(h.x * CELL + 2, h.y * CELL + 2, CELL - 4, CELL - 4);
+      if (!reducedMotion) {
+        ctx.shadowColor = COLOR_SNAKE_HEAD;
+        ctx.shadowBlur = 14;
+        ctx.fillRect(h.x * CELL + 2, h.y * CELL + 2, CELL - 4, CELL - 4);
+        ctx.shadowBlur = 0;
+      }
+      // Tiny eye facing direction
+      ctx.fillStyle = '#02060A';
+      const ex = h.x * CELL + CELL / 2 + state.dir.x * 5;
+      const ey = h.y * CELL + CELL / 2 + state.dir.y * 5;
+      ctx.fillRect(ex - 2, ey - 2, 4, 4);
+    }
+  }
+  function drawFood() {
+    if (state.food) drawCell(state.food.x, state.food.y, COLOR_FOOD, { glow: true });
+    if (state.bonus) {
+      const left = state.bonus.expiresAt - performance.now();
+      if (left <= 0) { state.bonus = null; return; }
+      // Pulse for the last second.
+      const pulse = left < 1500 ? (0.5 + 0.5 * Math.sin(performance.now() / 80)) : 1;
+      ctx.globalAlpha = 0.45 + 0.55 * pulse;
+      drawCell(state.bonus.x, state.bonus.y, COLOR_BONUS, { glow: true });
+      ctx.globalAlpha = 1;
+    }
+  }
+  function render() {
+    drawGrid();
+    drawFood();
+    drawSnake();
+  }
+
+  // ── Tick: advance snake one cell ─────────────────────────────────────────
+  function tick() {
+    if (state.paused || state.over || !state.started) return;
+    // Commit pending direction (debounced — prevents instant-reverse death).
+    state.dir = state.pendingDir;
+    const head = state.snake[0];
+    let nx = head.x + state.dir.x;
+    let ny = head.y + state.dir.y;
+
+    // Wall handling.
+    if (state.wrap) {
+      if (nx < 0) nx = COLS - 1;
+      if (nx >= COLS) nx = 0;
+      if (ny < 0) ny = ROWS - 1;
+      if (ny >= ROWS) ny = 0;
+    } else if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
+      return gameOver();
+    }
+
+    // Eat? Note: tail collision is OK if we're not also growing this tick.
+    const willEat = state.food && state.food.x === nx && state.food.y === ny;
+    const willBonus = state.bonus && state.bonus.x === nx && state.bonus.y === ny;
+    const growthThisTick = willEat || willBonus;
+
+    // Self-collision: check against body cells (tail moves unless growing).
+    const limit = growthThisTick ? state.snake.length : state.snake.length - 1;
+    for (let i = 0; i < limit; i++) {
+      if (state.snake[i].x === nx && state.snake[i].y === ny) return gameOver();
+    }
+
+    state.snake.unshift({ x: nx, y: ny });
+    if (willEat) {
+      state.score += 10;
+      state.length++;
+      beep(660, 80);
+      spawnFood();
+    } else if (willBonus) {
+      state.score += 50;
+      state.length += 3;
+      beep(880, 80);
+      beep(1320, 80);   // a quick two-tone for bonus
+      state.bonus = null;
+    } else {
+      state.snake.pop();
+    }
+
+    if (state.score > state.best) state.best = state.score;
+    updateHud();
+    render();
+  }
+
+  // ── HUD ──────────────────────────────────────────────────────────────────
+  function updateHud() {
+    scoreEl.textContent = state.score.toString();
+    lengthEl.textContent = state.length.toString();
+    bestEl.textContent = state.best.toString();
+  }
+
+  // ── Leaderboard (top 5) ──────────────────────────────────────────────────
+  function loadLb() {
+    try {
+      const raw = localStorage.getItem(LB_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr.filter(e => e && typeof e.score === 'number').slice(0, 5);
+    } catch (e) { return []; }
+  }
+  function saveLb(arr) {
+    try { localStorage.setItem(LB_KEY, JSON.stringify(arr.slice(0, 5))); } catch (e) {}
+  }
+  function renderLb() {
+    const arr = loadLb();
+    lbEl.innerHTML = '';
+    if (!arr.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.style.display = 'block';
+      li.style.gridColumn = '1 / -1';
+      li.textContent = 'no scores yet — play to start';
+      lbEl.appendChild(li);
+      return;
+    }
+    for (const e of arr) {
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.className = 'name';
+      name.textContent = e.name || '???';
+      const score = document.createElement('span'); score.className = 'score';
+      score.textContent = e.score.toLocaleString('en-US');
+      li.appendChild(name); li.appendChild(score);
+      lbEl.appendChild(li);
+    }
+  }
+  function addLbEntry(name) {
+    const arr = loadLb();
+    arr.push({
+      name: (name || '???').toUpperCase().slice(0, 3).padEnd(3, '?'),
+      score: state.score,
+      length: state.length,
+      speed: state.speed,
+      ts: Date.now(),
+    });
+    arr.sort((a, b) => b.score - a.score);
+    saveLb(arr.slice(0, 5));
+    renderLb();
+  }
+  function qualifiesForLb() {
+    if (state.score === 0) return false;
+    const arr = loadLb();
+    if (arr.length < 5) return true;
+    return state.score > arr[arr.length - 1].score;
+  }
+
+  // ── Preferences ──────────────────────────────────────────────────────────
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(PREF_KEY);
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (typeof p.wrap === 'boolean') state.wrap = p.wrap;
+      if (typeof p.speed === 'string' && p.speed in SPEEDS) state.speed = p.speed;
+    } catch (e) {}
+  }
+  function savePrefs() {
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify({ wrap: state.wrap, speed: state.speed }));
+    } catch (e) {}
+  }
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+  function reset() {
+    if (state.tickHandle) clearInterval(state.tickHandle);
+    if (state.bonusTimer) clearTimeout(state.bonusTimer);
+    state.snake = [];
+    const cx = Math.floor(COLS / 2);
+    const cy = Math.floor(ROWS / 2);
+    for (let i = 0; i < 3; i++) state.snake.push({ x: cx - i, y: cy });
+    state.dir = { x: 1, y: 0 };
+    state.pendingDir = { x: 1, y: 0 };
+    state.score = 0;
+    state.length = 3;
+    state.paused = false;
+    state.over = false;
+    state.started = false;
+    state.food = null;
+    state.bonus = null;
+    spawnFood();
+    overOverlay.classList.remove('show');
+    overOverlay.setAttribute('aria-hidden', 'true');
+    pauseOverlay.classList.remove('show');
+    pauseOverlay.setAttribute('aria-hidden', 'true');
+    startHint.classList.remove('hidden');
+    initialsInput.value = '';
+    initialsBlock.style.display = '';
+    updateHud();
+    render();
+  }
+  function start() {
+    if (state.started) return;
+    state.started = true;
+    startHint.classList.add('hidden');
+    state.tickHandle = setInterval(tick, SPEEDS[state.speed]);
+    scheduleBonus();
+  }
+  function togglePause() {
+    if (state.over || !state.started) return;
+    state.paused = !state.paused;
+    pauseOverlay.classList.toggle('show', state.paused);
+    pauseOverlay.setAttribute('aria-hidden', state.paused ? 'false' : 'true');
+  }
+  function gameOver() {
+    state.over = true;
+    if (state.tickHandle) clearInterval(state.tickHandle);
+    if (state.bonusTimer) clearTimeout(state.bonusTimer);
+    finalScore.textContent = state.score.toLocaleString('en-US');
+    finalLength.textContent = String(state.length);
+    finalSpeed.textContent = state.speed;
+    const willPrompt = qualifiesForLb();
+    initialsBlock.style.display = willPrompt ? '' : 'none';
+    overTitle.textContent = willPrompt ? 'NEW HIGH SCORE' : 'GAME OVER';
+    overTitle.classList.toggle('win', willPrompt);
+    overOverlay.classList.add('show');
+    overOverlay.setAttribute('aria-hidden', 'false');
+    if (willPrompt) setTimeout(() => initialsInput.focus(), 60);
+    beep(220, 240, 'sawtooth');
+    beep(160, 240, 'sawtooth');
+  }
+  function setSpeed(s) {
+    if (!(s in SPEEDS)) return;
+    state.speed = s;
+    document.querySelectorAll('.speed-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.speed === s);
+    });
+    if (state.tickHandle) {
+      clearInterval(state.tickHandle);
+      if (state.started && !state.over) {
+        state.tickHandle = setInterval(tick, SPEEDS[s]);
+      }
+    }
+    savePrefs();
+  }
+  function toggleWrap() {
+    state.wrap = !state.wrap;
+    wrapToggle.classList.toggle('on', state.wrap);
+    wrapToggle.setAttribute('aria-checked', state.wrap ? 'true' : 'false');
+    savePrefs();
+  }
+
+  // ── Input ────────────────────────────────────────────────────────────────
+  function setDir(dx, dy) {
+    // Reject 180° flip — must turn through a perpendicular first.
+    if (state.dir.x === -dx && state.dir.y === -dy) return;
+    state.pendingDir = { x: dx, y: dy };
+  }
+
+  function onKey(e) {
+    const k = e.key.toLowerCase();
+    if (k === 'r') { reset(); start(); e.preventDefault(); return; }
+    if (k === ' ' || k === 'spacebar') {
+      if (!state.started) start();
+      else togglePause();
+      e.preventDefault();
+      return;
+    }
+    if (k === 'w' || k === 'arrowup') { if (!state.started) start(); setDir(0, -1); e.preventDefault(); }
+    else if (k === 's' || k === 'arrowdown') { if (!state.started) start(); setDir(0, 1); e.preventDefault(); }
+    else if (k === 'a' || k === 'arrowleft') { if (!state.started) start(); setDir(-1, 0); e.preventDefault(); }
+    else if (k === 'd' || k === 'arrowright') { if (!state.started) start(); setDir(1, 0); e.preventDefault(); }
+  }
+
+  // Touch swipe input
+  let touchStart = null;
+  function onTouchStart(e) {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+    if (!state.started) start();
+  }
+  function onTouchEnd(e) {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) {
+      // Tap = pause.
+      togglePause();
+    } else if (Math.abs(dx) > Math.abs(dy)) {
+      setDir(dx > 0 ? 1 : -1, 0);
+    } else {
+      setDir(0, dy > 0 ? 1 : -1);
+    }
+    touchStart = null;
+  }
+
+  // ── Wire up ──────────────────────────────────────────────────────────────
+  window.addEventListener('keydown', onKey);
+  document.getElementById('field').addEventListener('touchstart', onTouchStart, { passive: true });
+  document.getElementById('field').addEventListener('touchend', onTouchEnd, { passive: true });
+  speedRow.addEventListener('click', (e) => {
+    const btn = e.target.closest('.speed-btn');
+    if (btn) setSpeed(btn.dataset.speed);
+  });
+  wrapToggle.addEventListener('click', toggleWrap);
+  wrapToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') { toggleWrap(); e.preventDefault(); }
+  });
+  restartBtn.addEventListener('click', () => {
+    const name = (initialsInput.value || '').trim();
+    if (initialsBlock.style.display !== 'none' && name) addLbEntry(name);
+    reset();
+    start();
+  });
+  initialsInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') restartBtn.click();
+  });
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  loadPrefs();
+  setSpeed(state.speed);
+  wrapToggle.classList.toggle('on', state.wrap);
+  wrapToggle.setAttribute('aria-checked', state.wrap ? 'true' : 'false');
+  renderLb();
+  reset();
+})();
+</script>
+</body>
+</html>

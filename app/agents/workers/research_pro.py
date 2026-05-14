@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import random
 from typing import Any
 
 from agno.agent import Agent
@@ -39,7 +41,46 @@ class ResearchPro(Worker):
             output_schema=ResearchOutput,
         )
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        kit = (context or {}).get("kit")
+
+        # ── Kit fast path: deterministic feature brief, no LLM ──────────────
+        if kit:
+            await asyncio.sleep(0.35 + random.random() * 0.25)
+            features = kit.get("features", []) or []
+            findings = [
+                {
+                    "claim": f"{f['label']} — {f['detail']}"[:200],
+                    "confidence": 0.95,
+                }
+                for f in features[:6]
+            ]
+            sources = [
+                "internal feature brief",
+                "kit playbook",
+                "demo-bar checklist",
+            ]
+            kit_id = kit.get("kit_id", "kit")
+            summary = (
+                f"Locked {len(findings)} must-have features for the {kit_id} build "
+                f"(kit playbook). Confidence is high because every item is a deterministic "
+                f"requirement, not an estimate."
+            )
+            return {
+                "summary": summary,
+                "findings": findings,
+                "sources": sources,
+                "features_locked": len(findings),
+                "counts": {"findings": len(findings), "sources": len(sources)},
+                "source": f"kit:{kit_id}",
+            }
+
+        # ── Free-form path: LLM ─────────────────────────────────────────────
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the research brief."
         result = await self._agent.arun(prompt)
         out: ResearchOutput = result.content  # type: ignore[assignment]
@@ -48,4 +89,5 @@ class ResearchPro(Worker):
             "findings": [f.model_dump() for f in out.findings],
             "sources": out.sources,
             "counts": {"findings": len(out.findings), "sources": len(out.sources)},
+            "source": "llm",
         }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import random
 from typing import Any
 
 from agno.agent import Agent
@@ -33,7 +35,37 @@ class SeoBrief(Worker):
             output_schema=SeoBriefOutput,
         )
 
-    async def run(self, intent: str, rationale: str) -> dict[str, Any]:
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        kit = (context or {}).get("kit")
+
+        # ── Kit fast path: deterministic brand block, no LLM ────────────────
+        if kit:
+            await asyncio.sleep(0.3 + random.random() * 0.2)
+            brand = kit.get("brand", {}) or {}
+            name = brand.get("name", "Artifact")
+            tagline = brand.get("tagline", "")
+            audience = brand.get("audience", []) or []
+            keywords = brand.get("keywords", []) or []
+            summary = f'name: "{name}" · tone: {tagline} · audience: {", ".join(audience)}'
+            return {
+                "summary": summary[:280],
+                "brand_name": name,
+                "tagline": tagline,
+                "audiences": audience,
+                "keywords": keywords,
+                "counts": {
+                    "keywords": len(keywords),
+                    "audiences": len(audience),
+                },
+                "source": f"kit:{kit.get('kit_id', 'kit')}",
+            }
+
+        # ── Free-form path: LLM ─────────────────────────────────────────────
         prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the SEO brief."
         result = await self._agent.arun(prompt)
         out: SeoBriefOutput = result.content  # type: ignore[assignment]
@@ -42,4 +74,5 @@ class SeoBrief(Worker):
             "keywords": out.keywords,
             "audiences": out.audiences,
             "counts": {"keywords": len(out.keywords), "audiences": len(out.audiences)},
+            "source": "llm",
         }

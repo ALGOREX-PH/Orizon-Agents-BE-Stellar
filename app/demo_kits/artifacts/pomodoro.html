@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CADENCE·25</title>
+<style>
+  :root {
+    --bg: #0E0A1F;
+    --surface: #181030;
+    --surface-2: #20183E;
+    --border: #2E2354;
+    --text: #F4F0FE;
+    --muted: #9C92BD;
+    --primary: #FF9F1C;
+    --accent: #7A5CFF;
+    --danger: #FF4D6D;
+    --ok: #3DFF85;
+    --ease: cubic-bezier(.4,.0,.2,1);
+    --ring: 220px;
+  }
+  :root[data-theme="light"] {
+    --bg: #FBF7FF;
+    --surface: #FFFFFF;
+    --surface-2: #F1ECFD;
+    --border: #DCD3F0;
+    --text: #1A1130;
+    --muted: #6B628A;
+    --primary: #E07A00;
+    --accent: #5E3CFF;
+    --danger: #D4314D;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background:
+      radial-gradient(ellipse at top, rgba(255,159,28,.10), transparent 60%),
+      radial-gradient(ellipse at bottom left, rgba(122,92,255,.10), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 240ms var(--ease);
+  }
+
+  .app {
+    width: 100%;
+    max-width: 760px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow:
+      0 30px 80px -30px rgba(0,0,0,.55),
+      0 0 0 1px rgba(255,159,28,.08) inset;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,159,28,.05), transparent);
+  }
+  header .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 {
+    margin: 0;
+    font-family: 'Space Mono', 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  header small { font-size: 10px; letter-spacing: 0.22em; color: var(--muted); text-transform: uppercase; }
+  header .actions { display: flex; gap: 6px; align-items: center; }
+  .icon-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: all 160ms var(--ease);
+  }
+  .icon-btn:hover, .icon-btn:focus-visible {
+    color: var(--text);
+    border-color: var(--primary);
+    outline: none;
+  }
+  .icon-btn.active { color: var(--primary); border-color: var(--primary); }
+  .icon-btn svg { width: 16px; height: 16px; }
+
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+  }
+  .tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 12px 16px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 160ms var(--ease);
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+
+  .view {
+    display: none;
+    padding: 32px 28px;
+  }
+  .view.active { display: block; }
+
+  /* ── Timer view ───────────────────────────────────────────────────────── */
+  .phase-label {
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .phase-label .phase-name { color: var(--primary); }
+  .ring-wrap {
+    position: relative;
+    width: var(--ring);
+    height: var(--ring);
+    margin: 0 auto;
+  }
+  .ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-bg { stroke: var(--surface-2); }
+  .ring-fg {
+    stroke: var(--primary);
+    transition: stroke-dashoffset 300ms var(--ease), stroke 400ms var(--ease);
+  }
+  .ring-fg.short { stroke: var(--accent); }
+  .ring-fg.long { stroke: var(--ok); }
+  .time-display {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    pointer-events: none;
+  }
+  .time-display .mm-ss {
+    font-family: 'Space Mono', 'JetBrains Mono', monospace;
+    font-size: 42px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.04em;
+  }
+  .time-display .sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .cycle-dots {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 22px 0 18px;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    transition: all 200ms var(--ease);
+  }
+  .dot.done { background: var(--primary); border-color: var(--primary); }
+  .dot.current { box-shadow: 0 0 12px rgba(255,159,28,.5); transform: scale(1.2); }
+
+  .actions-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .btn {
+    appearance: none;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 12px 22px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 160ms var(--ease);
+    min-width: 120px;
+  }
+  .btn:hover, .btn:focus-visible { border-color: var(--primary); color: var(--primary); outline: none; }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    border-color: transparent;
+    color: white;
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.1); color: white; }
+
+  .tomato-counter {
+    margin-top: 28px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+  .tomato-glyph {
+    width: 26px;
+    height: 26px;
+    color: var(--primary);
+  }
+  .tomato-counter b {
+    font-family: 'Space Mono', monospace;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .tomato-counter span {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  /* ── Settings view ────────────────────────────────────────────────────── */
+  .setting {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .setting label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .setting label b {
+    color: var(--text);
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  .setting input[type="range"] {
+    width: 100%;
+    margin-top: 10px;
+    appearance: none;
+    background: transparent;
+  }
+  .setting input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+  }
+  .setting input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    margin-top: -6px;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(255,159,28,.35);
+  }
+  .setting input[type="range"]::-moz-range-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+  }
+  .setting input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+    border: none;
+  }
+  .setting .scale-marks {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 4px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+  }
+
+  /* ── History view ─────────────────────────────────────────────────────── */
+  .history-day {
+    margin-bottom: 18px;
+  }
+  .history-day h4 {
+    margin: 0 0 10px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    color: var(--muted);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .history-day h4 span:last-child {
+    color: var(--primary);
+  }
+  .history-day ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .history-day li {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    display: grid;
+    grid-template-columns: 80px 1fr auto;
+    gap: 10px;
+    align-items: center;
+  }
+  .history-day li .kind { color: var(--muted); letter-spacing: 0.18em; text-transform: uppercase; }
+  .history-day li .kind.work { color: var(--primary); }
+  .history-day li .kind.short { color: var(--accent); }
+  .history-day li .kind.long { color: var(--ok); }
+  .history-day li .dur { color: var(--text); }
+  .history-day li time { color: var(--muted); font-size: 10px; }
+  .history-empty {
+    text-align: center;
+    padding: 30px 20px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+  }
+
+  .keyboard-hint {
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 22px;
+    line-height: 2;
+  }
+  .keyboard-hint kbd {
+    display: inline-block;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: inherit;
+    font-size: 9px;
+    color: var(--text);
+    margin: 0 3px;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--surface);
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    padding: 10px 18px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    border-radius: 6px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms var(--ease), transform 240ms var(--ease);
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 600px) {
+    .app { border-radius: 12px; }
+    .view { padding: 22px 18px; }
+    :root { --ring: 180px; }
+    .time-display .mm-ss { font-size: 34px; }
+    .actions-row { flex-direction: column; align-items: stretch; }
+    .btn { min-width: unset; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ring-fg { transition: stroke-dashoffset 80ms; }
+    * { transition-duration: 80ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app" role="application" aria-label="CADENCE·25 deep-work timer">
+  <header>
+    <div class="brand">
+      <h1>CADENCE·25</h1>
+      <small>focus / cycle / chime</small>
+    </div>
+    <div class="actions">
+      <button class="icon-btn" id="theme-btn" type="button" aria-label="toggle theme" title="theme · T">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="mute-btn" type="button" aria-label="toggle chime" title="mute chime · M">
+        <svg id="mute-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="notif-btn" type="button" aria-label="toggle notifications" title="notifications · N">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="timer" role="tab" type="button">timer</button>
+    <button class="tab" data-view="settings" role="tab" type="button">settings</button>
+    <button class="tab" data-view="history" role="tab" type="button">history</button>
+  </nav>
+
+  <section class="view active" data-view="timer" role="tabpanel">
+    <div class="phase-label">phase · <span class="phase-name" id="phase-name">work</span></div>
+    <div class="ring-wrap">
+      <svg viewBox="0 0 240 240">
+        <circle class="ring-bg" cx="120" cy="120" r="108" stroke-width="12" fill="none"/>
+        <circle id="ring-fg" class="ring-fg" cx="120" cy="120" r="108" stroke-width="12" fill="none"
+                stroke-dasharray="678.58" stroke-dashoffset="0" stroke-linecap="round"/>
+      </svg>
+      <div class="time-display">
+        <div class="mm-ss" id="time">25:00</div>
+        <div class="sub" id="cycle-label">cycle 1 of 4</div>
+      </div>
+    </div>
+
+    <div class="cycle-dots" id="cycle-dots">
+      <div class="dot current"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    </div>
+
+    <div class="actions-row">
+      <button class="btn primary" id="start-btn" type="button">start · ␣</button>
+      <button class="btn" id="reset-btn" type="button">reset · R</button>
+      <button class="btn" id="skip-btn" type="button">skip · S</button>
+    </div>
+
+    <div class="tomato-counter">
+      <svg class="tomato-glyph" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 6c-1 -3 -4 -4 -6 -3 c3 0 5 1.5 5 3.5 c-3 0.3 -6 1.6 -8 4 c-3 4 -3 11 1 14 c3 2 8 3 8 3 s5 -1 8 -3 c4 -3 4 -10 1 -14 c-2 -2.4 -5 -3.7 -8 -4 c0 -2 2 -3.5 5 -3.5 c-2 -1 -5 0 -6 3z"
+              fill="currentColor"/>
+      </svg>
+      <b id="tomato-count">0</b>
+      <span>tomatoes today</span>
+    </div>
+
+    <div class="keyboard-hint">
+      <kbd>␣</kbd> start/pause · <kbd>R</kbd> reset · <kbd>S</kbd> skip · <kbd>T</kbd> theme · <kbd>M</kbd> mute · <kbd>N</kbd> notify
+    </div>
+  </section>
+
+  <section class="view" data-view="settings" role="tabpanel">
+    <div class="setting">
+      <label><span>work duration</span><b id="work-val">25 min</b></label>
+      <input type="range" id="work-range" min="15" max="90" step="5" value="25" aria-label="work duration in minutes">
+      <div class="scale-marks"><span>15</span><span>50</span><span>90</span></div>
+    </div>
+    <div class="setting">
+      <label><span>short break</span><b id="short-val">5 min</b></label>
+      <input type="range" id="short-range" min="3" max="15" step="1" value="5" aria-label="short break duration in minutes">
+      <div class="scale-marks"><span>3</span><span>9</span><span>15</span></div>
+    </div>
+    <div class="setting">
+      <label><span>long break</span><b id="long-val">20 min</b></label>
+      <input type="range" id="long-range" min="10" max="45" step="5" value="20" aria-label="long break duration in minutes">
+      <div class="scale-marks"><span>10</span><span>25</span><span>45</span></div>
+    </div>
+  </section>
+
+  <section class="view" data-view="history" role="tabpanel">
+    <div id="history-content"></div>
+  </section>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const SETTINGS_KEY = 'orizon.pomodoro.settings.v1';
+  const HISTORY_KEY = 'orizon.pomodoro.history.v1';
+  const DAILY_KEY = 'orizon.pomodoro.daily.v1';
+  const RING_CIRCUMFERENCE = 2 * Math.PI * 108;   // ≈ 678.58
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const state = {
+    settings: { workMin: 25, shortMin: 5, longMin: 20 },
+    phase: 'work',                  // 'work' | 'short' | 'long'
+    phaseStartedAt: 0,
+    pausedAtElapsedMs: 0,
+    phaseDurationMs: 25 * 60 * 1000,
+    running: false,
+    cycle: 0,                       // completed work intervals in current 4-cycle ritual
+    daily: { count: 0, date: todayKey() },
+    history: [],                    // [{kind, durationMs, ts}]
+    theme: 'dark',
+    muted: false,
+    notifEnabled: false,
+    rafHandle: 0,
+  };
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const ringFg = document.getElementById('ring-fg');
+  const timeEl = document.getElementById('time');
+  const phaseNameEl = document.getElementById('phase-name');
+  const cycleLabelEl = document.getElementById('cycle-label');
+  const cycleDots = document.getElementById('cycle-dots');
+  const startBtn = document.getElementById('start-btn');
+  const resetBtn = document.getElementById('reset-btn');
+  const skipBtn = document.getElementById('skip-btn');
+  const tomatoCount = document.getElementById('tomato-count');
+  const themeBtn = document.getElementById('theme-btn');
+  const muteBtn = document.getElementById('mute-btn');
+  const muteIcon = document.getElementById('mute-icon');
+  const notifBtn = document.getElementById('notif-btn');
+  const toastEl = document.getElementById('toast');
+  const workRange = document.getElementById('work-range');
+  const shortRange = document.getElementById('short-range');
+  const longRange = document.getElementById('long-range');
+  const workVal = document.getElementById('work-val');
+  const shortVal = document.getElementById('short-val');
+  const longVal = document.getElementById('long-val');
+  const historyContent = document.getElementById('history-content');
+
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ── Date helpers ─────────────────────────────────────────────────────────
+  function todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  }
+  function fmtDayHeading(key) {
+    const today = todayKey();
+    if (key === today) return 'today';
+    const d = new Date(key);
+    const diff = Math.round((new Date(today).getTime() - d.getTime()) / 86400000);
+    if (diff === 1) return 'yesterday';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function fmtTime(ms) {
+    if (ms < 0) ms = 0;
+    const total = Math.ceil(ms / 1000);
+    const mm = String(Math.floor(total / 60)).padStart(2, '0');
+    const ss = String(total % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  }
+  function fmtMinutes(ms) {
+    const m = Math.round(ms / 60000);
+    return m + ' min';
+  }
+
+  // ── Persistence ──────────────────────────────────────────────────────────
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (typeof s.workMin === 'number') state.settings.workMin = clamp(s.workMin, 15, 90);
+      if (typeof s.shortMin === 'number') state.settings.shortMin = clamp(s.shortMin, 3, 15);
+      if (typeof s.longMin === 'number') state.settings.longMin = clamp(s.longMin, 10, 45);
+      if (typeof s.theme === 'string') state.theme = s.theme;
+      if (typeof s.muted === 'boolean') state.muted = s.muted;
+      if (typeof s.notifEnabled === 'boolean') state.notifEnabled = s.notifEnabled;
+    } catch (e) {}
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        ...state.settings, theme: state.theme, muted: state.muted, notifEnabled: state.notifEnabled,
+      }));
+    } catch (e) {}
+  }
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      if (!raw) return;
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        // Drop entries older than 14 days.
+        const cutoff = Date.now() - 14 * 86400000;
+        state.history = arr.filter(e => e && typeof e.ts === 'number' && e.ts >= cutoff);
+      }
+    } catch (e) {}
+  }
+  function saveHistory() {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history)); } catch (e) {}
+  }
+  function loadDaily() {
+    try {
+      const raw = localStorage.getItem(DAILY_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d && d.date === todayKey() && typeof d.count === 'number') state.daily = d;
+      else state.daily = { count: 0, date: todayKey() };
+    } catch (e) {}
+  }
+  function saveDaily() {
+    try { localStorage.setItem(DAILY_KEY, JSON.stringify(state.daily)); } catch (e) {}
+  }
+  function rolloverDailyIfNeeded() {
+    const today = todayKey();
+    if (state.daily.date !== today) {
+      state.daily = { count: 0, date: today };
+      saveDaily();
+    }
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // ── Phase logic ──────────────────────────────────────────────────────────
+  function durationForPhase(p) {
+    if (p === 'work') return state.settings.workMin * 60000;
+    if (p === 'short') return state.settings.shortMin * 60000;
+    return state.settings.longMin * 60000;
+  }
+  function nextPhase() {
+    if (state.phase === 'work') {
+      const newCycle = state.cycle + 1;
+      if (newCycle >= 4) {
+        state.cycle = 0;
+        return 'long';
+      }
+      state.cycle = newCycle;
+      return 'short';
+    }
+    return 'work';
+  }
+  function enterPhase(p, autoStart = true) {
+    state.phase = p;
+    state.phaseDurationMs = durationForPhase(p);
+    state.phaseStartedAt = performance.now();
+    state.pausedAtElapsedMs = 0;
+    state.running = autoStart;
+    updateRingColor();
+    render();
+  }
+
+  // ── Audio chime (3 tones, lazy AudioContext) ─────────────────────────────
+  let audioCtx = null;
+  function ensureAudio() {
+    if (audioCtx) return audioCtx;
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { return null; }
+    return audioCtx;
+  }
+  function playChime() {
+    if (state.muted) return;
+    const ctx2 = ensureAudio();
+    if (!ctx2) return;
+    const now = ctx2.currentTime;
+    const tones = [523.25, 659.25, 783.99];   // C5, E5, G5
+    tones.forEach((freq, i) => {
+      const osc = ctx2.createOscillator();
+      const gain = ctx2.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.18);
+      gain.gain.setValueAtTime(0.0001, now + i * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + i * 0.18 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.18 + 0.65);
+      osc.connect(gain).connect(ctx2.destination);
+      osc.start(now + i * 0.18);
+      osc.stop(now + i * 0.18 + 0.7);
+    });
+  }
+
+  // ── Notifications ────────────────────────────────────────────────────────
+  async function requestNotificationPermission() {
+    if (!('Notification' in window)) {
+      toast('notifications not supported');
+      return false;
+    }
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') {
+      toast('blocked in browser settings');
+      return false;
+    }
+    const res = await Notification.requestPermission();
+    return res === 'granted';
+  }
+  function sendNotification(title, body) {
+    if (!state.notifEnabled) return;
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try { new Notification(title, { body, silent: state.muted }); } catch (e) {}
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  function updateRingColor() {
+    ringFg.classList.remove('short', 'long');
+    if (state.phase === 'short') ringFg.classList.add('short');
+    else if (state.phase === 'long') ringFg.classList.add('long');
+  }
+  function renderRing() {
+    let elapsed;
+    if (state.running) {
+      elapsed = performance.now() - state.phaseStartedAt;
+    } else {
+      elapsed = state.pausedAtElapsedMs;
+    }
+    const remaining = state.phaseDurationMs - elapsed;
+    const ratio = clamp(remaining / state.phaseDurationMs, 0, 1);
+    const offset = RING_CIRCUMFERENCE * (1 - ratio);
+    ringFg.setAttribute('stroke-dashoffset', String(offset));
+    timeEl.textContent = fmtTime(remaining);
+    return remaining;
+  }
+  function render() {
+    rolloverDailyIfNeeded();
+    phaseNameEl.textContent = state.phase === 'work' ? 'work' : state.phase === 'short' ? 'short break' : 'long break';
+    cycleLabelEl.textContent = state.phase === 'work'
+      ? `cycle ${state.cycle + 1} of 4`
+      : (state.phase === 'long' ? 'long break' : `break · cycle ${state.cycle} of 4`);
+    // Cycle dots
+    const dots = cycleDots.querySelectorAll('.dot');
+    dots.forEach((d, i) => {
+      d.classList.toggle('done', i < state.cycle);
+      d.classList.toggle('current', i === state.cycle && state.phase === 'work');
+    });
+    tomatoCount.textContent = state.daily.count.toString();
+    updateRingColor();
+    startBtn.textContent = state.running ? 'pause · ␣' : (state.pausedAtElapsedMs > 0 ? 'resume · ␣' : 'start · ␣');
+    renderRing();
+  }
+
+  // ── Loop ─────────────────────────────────────────────────────────────────
+  function tick() {
+    if (state.running) {
+      const remaining = renderRing();
+      if (remaining <= 0) finishPhase();
+    }
+    state.rafHandle = requestAnimationFrame(tick);
+  }
+
+  function finishPhase() {
+    const completedKind = state.phase;
+    const completedDur = state.phaseDurationMs;
+    state.history.unshift({ kind: completedKind, durationMs: completedDur, ts: Date.now() });
+    if (state.history.length > 200) state.history.pop();
+    saveHistory();
+    if (completedKind === 'work') {
+      state.daily.count++;
+      saveDaily();
+    }
+    playChime();
+    sendNotification(
+      completedKind === 'work' ? 'Time for a break' : 'Back to work',
+      completedKind === 'work'
+        ? `Nice — ${state.daily.count} tomato${state.daily.count === 1 ? '' : 'es'} today.`
+        : 'Break is over. Refocus.',
+    );
+    const np = nextPhase();
+    enterPhase(np, true);
+  }
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+  function toggleStart() {
+    if (state.running) {
+      // Pause.
+      state.pausedAtElapsedMs = performance.now() - state.phaseStartedAt;
+      state.running = false;
+    } else {
+      // Start / resume.
+      state.phaseStartedAt = performance.now() - state.pausedAtElapsedMs;
+      state.running = true;
+      // Audio must be unlocked on a user gesture in most browsers.
+      ensureAudio();
+    }
+    render();
+  }
+  function resetPhase() {
+    state.phaseStartedAt = performance.now();
+    state.pausedAtElapsedMs = 0;
+    state.running = false;
+    render();
+  }
+  function skipPhase() {
+    finishPhase();
+  }
+  function toggleMute() {
+    state.muted = !state.muted;
+    muteBtn.classList.toggle('active', !state.muted);
+    if (state.muted) {
+      muteIcon.innerHTML =
+        '<path d="M11 5L6 9H2v6h4l5 4V5z"/>' +
+        '<line x1="23" y1="9" x2="17" y2="15"/>' +
+        '<line x1="17" y1="9" x2="23" y2="15"/>';
+    } else {
+      muteIcon.innerHTML =
+        '<path d="M11 5L6 9H2v6h4l5 4V5z"/>' +
+        '<path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+    }
+    toast(state.muted ? 'chime muted' : 'chime on');
+    saveSettings();
+  }
+  function toggleTheme() {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    applyTheme();
+    saveSettings();
+  }
+  function applyTheme() {
+    if (state.theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+  }
+  async function toggleNotifications() {
+    if (state.notifEnabled) {
+      state.notifEnabled = false;
+      notifBtn.classList.remove('active');
+      toast('notifications off');
+    } else {
+      const ok = await requestNotificationPermission();
+      if (ok) {
+        state.notifEnabled = true;
+        notifBtn.classList.add('active');
+        toast('notifications on');
+        sendNotification('CADENCE·25', 'You will be notified at phase transitions.');
+      }
+    }
+    saveSettings();
+  }
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toastEl.classList.remove('show'), 1500);
+  }
+
+  // ── Settings UI ──────────────────────────────────────────────────────────
+  function syncSettingsUi() {
+    workRange.value = String(state.settings.workMin);
+    shortRange.value = String(state.settings.shortMin);
+    longRange.value = String(state.settings.longMin);
+    workVal.textContent = `${state.settings.workMin} min`;
+    shortVal.textContent = `${state.settings.shortMin} min`;
+    longVal.textContent = `${state.settings.longMin} min`;
+  }
+  function onRangeChange(name, val) {
+    const v = parseInt(val, 10);
+    if (name === 'workMin') state.settings.workMin = clamp(v, 15, 90);
+    else if (name === 'shortMin') state.settings.shortMin = clamp(v, 3, 15);
+    else state.settings.longMin = clamp(v, 10, 45);
+    syncSettingsUi();
+    saveSettings();
+    // If the current phase isn't running, sync its duration so the display
+    // reflects the new setting immediately.
+    if (!state.running && state.pausedAtElapsedMs === 0) {
+      state.phaseDurationMs = durationForPhase(state.phase);
+      render();
+    }
+  }
+
+  // ── History UI ───────────────────────────────────────────────────────────
+  function renderHistory() {
+    if (!state.history.length) {
+      historyContent.innerHTML = '<div class="history-empty">no completed sessions yet</div>';
+      return;
+    }
+    // Group by day.
+    const byDay = new Map();
+    for (const e of state.history) {
+      const d = new Date(e.ts);
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(e);
+    }
+    const days = [...byDay.keys()].sort().reverse();
+    historyContent.innerHTML = '';
+    for (const day of days) {
+      const entries = byDay.get(day);
+      const workCount = entries.filter(e => e.kind === 'work').length;
+      const card = document.createElement('div');
+      card.className = 'history-day';
+      const h = document.createElement('h4');
+      h.innerHTML = `<span>${fmtDayHeading(day)}</span><span>${workCount} tomato${workCount === 1 ? '' : 'es'}</span>`;
+      card.appendChild(h);
+      const ul = document.createElement('ul');
+      for (const e of entries) {
+        const li = document.createElement('li');
+        const kind = e.kind === 'short' ? 'break' : e.kind === 'long' ? 'long' : 'work';
+        const k = document.createElement('span'); k.className = 'kind ' + e.kind; k.textContent = kind;
+        const dur = document.createElement('span'); dur.className = 'dur'; dur.textContent = fmtMinutes(e.durationMs);
+        const t = document.createElement('time');
+        const d = new Date(e.ts);
+        t.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        li.appendChild(k); li.appendChild(dur); li.appendChild(t);
+        ul.appendChild(li);
+      }
+      card.appendChild(ul);
+      historyContent.appendChild(card);
+    }
+  }
+
+  // ── Tabs ─────────────────────────────────────────────────────────────────
+  function switchView(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
+    if (name === 'history') renderHistory();
+  }
+
+  // ── Keyboard ─────────────────────────────────────────────────────────────
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'spacebar') { toggleStart(); e.preventDefault(); }
+    else if (k === 'r') { resetPhase(); e.preventDefault(); }
+    else if (k === 's') { skipPhase(); e.preventDefault(); }
+    else if (k === 't') { toggleTheme(); e.preventDefault(); }
+    else if (k === 'm') { toggleMute(); e.preventDefault(); }
+    else if (k === 'n') { toggleNotifications(); e.preventDefault(); }
+  });
+
+  // ── Wire-up ──────────────────────────────────────────────────────────────
+  startBtn.addEventListener('click', toggleStart);
+  resetBtn.addEventListener('click', resetPhase);
+  skipBtn.addEventListener('click', skipPhase);
+  themeBtn.addEventListener('click', toggleTheme);
+  muteBtn.addEventListener('click', toggleMute);
+  notifBtn.addEventListener('click', toggleNotifications);
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => switchView(t.dataset.view));
+  });
+  workRange.addEventListener('input', (e) => onRangeChange('workMin', e.target.value));
+  shortRange.addEventListener('input', (e) => onRangeChange('shortMin', e.target.value));
+  longRange.addEventListener('input', (e) => onRangeChange('longMin', e.target.value));
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  loadSettings();
+  loadHistory();
+  loadDaily();
+  rolloverDailyIfNeeded();
+  applyTheme();
+  muteBtn.classList.toggle('active', !state.muted);
+  if (state.notifEnabled && 'Notification' in window && Notification.permission === 'granted') {
+    notifBtn.classList.add('active');
+  } else {
+    state.notifEnabled = false;
+  }
+  syncSettingsUi();
+  enterPhase('work', false);
+  render();
+  state.rafHandle = requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

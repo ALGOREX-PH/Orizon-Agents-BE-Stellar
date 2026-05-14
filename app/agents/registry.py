@@ -1,29 +1,33 @@
 from __future__ import annotations
 
 from .workers.base import Worker
+from .workers.code_critic_worker import CodeCriticWorker
 from .workers.code_gen import CodeGen
 from .workers.copywrite import Copywrite
+from .workers.deploy_v0 import DeployV0
+from .workers.design_tokens import DesignTokens
 from .workers.mock import MockWorker
 from .workers.research_pro import ResearchPro
 from .workers.seo_brief import SeoBrief
 from .workers.sol_audit import SolAudit
 
-# Real Agno workers (GPT-4o-mini)
+# Real Agno workers
 _REAL: list[Worker] = [
-    Copywrite(),     # agt_01h8 copywrite.v3
-    SeoBrief(),      # agt_05x7 seo.brief
-    ResearchPro(),   # agt_09l5 research.pro
-    SolAudit(),      # agt_04m1 sol-audit
-    CodeGen(),       # agt_11c0 code.gen
+    Copywrite(),         # agt_01h8 copywrite.v3
+    DesignTokens(),      # agt_02k2 design.figma — kit-aware tokens
+    SolAudit(),          # agt_04m1 sol-audit
+    SeoBrief(),          # agt_05x7 seo.brief — kit-aware brand block
+    DeployV0(),          # agt_08j2 deploy.v0 — seal + preview URL
+    ResearchPro(),       # agt_09l5 research.pro — kit-aware feature brief
+    CodeGen(),           # agt_11c0 code.gen — context-aware HTML draft
+    CodeCriticWorker(),  # agt_12r0 code.critic — top-level polish step
 ]
 
 # Mock workers for the remaining agents in the registry
 _MOCK: list[Worker] = [
-    MockWorker("agt_02k2", "design.figma"),
     MockWorker("agt_03d9", "code.next"),
     MockWorker("agt_06q4", "vision.ocr"),
     MockWorker("agt_07w3", "ads.meta"),
-    MockWorker("agt_08j2", "deploy.v0"),
     MockWorker("agt_10b6", "translate.42"),
 ]
 
