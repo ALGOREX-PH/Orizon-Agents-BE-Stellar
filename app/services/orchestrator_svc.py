@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import random
 import secrets
 
 from ..agents.orchestrator import orchestrator_agent
@@ -40,8 +42,16 @@ def _registry_prompt_fragment() -> str:
     return "\n".join(lines)
 
 
-def _build_kit_plan(intent: str, kit: DemoKit) -> DecomposeResponse:
-    """Deterministic 6-step plan for a curated demo intent. No LLM call."""
+async def _build_kit_plan(intent: str, kit: DemoKit) -> DecomposeResponse:
+    """Deterministic 6-step plan for a curated demo intent. No LLM call.
+
+    A short randomized sleep up front mimics orchestrator "thinking time" so
+    the Decompose UX feels like real LLM planning instead of a hardcoded dict
+    being unpacked. ~1.4–2.4 s matches what a small reasoning-model call to
+    plan 6 steps would actually take.
+    """
+    await asyncio.sleep(1.4 + random.random() * 1.0)
+
     steps: list[PlanStep] = []
     for agent_id, rationale in _KIT_PIPELINE:
         agent = state.agents.get(agent_id)
@@ -89,7 +99,7 @@ async def decompose(intent: str) -> DecomposeResponse:
     # deterministic 6-step pipeline. Reliable for live demos; no LLM cost.
     kit = detect_kit(intent)
     if kit is not None:
-        return _build_kit_plan(intent, kit)
+        return await _build_kit_plan(intent, kit)
 
     # ── Free-form path: LLM orchestrator decides the plan ──────────────────
     prompt = f"""{_registry_prompt_fragment()}
