@@ -46,3 +46,16 @@ services:
         value: CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
       - key: STELLAR_ADMIN_ADDRESS
         value: GA7AI5TAJEZA27I666DSJC4MUJYBEWUYNNZWPU7R2ONA7IZQVO6R5OQV
+
+      # ── PDAX (PHP <-> crypto on/off-ramp) ──────────────────────────────
+      # Staging requires your Render outbound IPs be whitelisted by PDAX.
+      - key: PDAX_ENVIRONMENT
+        value: stage
+      - key: PDAX_USERNAME
+        sync: false
+      - key: PDAX_PASSWORD
+        sync: false
+      - key: PDAX_OTP_SECRET
+        sync: false
+      - key: PDAX_WEBHOOK_SECRET
+        sync: false
