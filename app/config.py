@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     stellar_admin_address: str = ""
     stellar_signing_key: str = ""  # S... secret — inject via host secrets in prod
 
+    # ── PDAX (PHP ↔ crypto on/off-ramp, institutions API) ─────
+    # Env: "production" | "stage" | "uat". Base URL is resolved per
+    # environment in app/pdax/config.py.
+    pdax_environment: str = "uat"
+    pdax_username: str = ""  # PDAX account email
+    pdax_password: str = ""  # inject via host secrets in prod
+    pdax_otp_secret: str = ""  # TOTP seed if MFA is enabled (optional)
+    pdax_webhook_secret: str = ""  # shared secret for webhook validation
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
