@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import agents, flow, metrics, orchestrator, payments, stellar, tasks, trace
+from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
 from .seed import seed_registry
 
 
@@ -43,6 +43,7 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(flow.router, prefix="/api")
 app.include_router(payments.router, prefix="/api")
 app.include_router(stellar.router, prefix="/api")
+app.include_router(pdax.router, prefix="/api")
 
 
 @app.get("/")
