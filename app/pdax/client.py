@@ -12,13 +12,17 @@ pass paths like "pdax-institution/v1/balances".
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
 
+from ..config import settings
 from .auth import PdaxAuth
 from .config import base_url
 from .errors import PdaxError
+from .observability import log_call
+from .resilience import RateLimiter, with_retries
 
 
 class PdaxClient:
@@ -26,6 +30,10 @@ class PdaxClient:
         base = base_url().rstrip("/") + "/"
         self._http = httpx.AsyncClient(base_url=base, timeout=timeout)
         self._auth = PdaxAuth()
+        self._limiter = RateLimiter(
+            settings.pdax_rate_limit_per_sec, settings.pdax_rate_limit_burst
+        )
+        self._retries = max(1, settings.pdax_max_retries)
 
     async def request(
         self,
@@ -36,20 +44,34 @@ class PdaxClient:
         json: dict[str, Any] | None = None,
         authenticated: bool = True,
     ) -> Any:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if authenticated:
-            headers.update(await self._auth.access_headers(self._http))
         clean_params = {k: v for k, v in (params or {}).items() if v is not None}
-        try:
-            resp = await self._http.request(
-                method, path.lstrip("/"), params=clean_params or None, json=json, headers=headers
-            )
-        except httpx.HTTPError as e:
-            raise PdaxError(f"PDAX transport error: {e}") from e
-        return _parse(resp)
+        rel = path.lstrip("/")
+
+        async def _send(attempt: int) -> Any:
+            await self._limiter.acquire()
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if authenticated:
+                headers.update(await self._auth.access_headers(self._http))
+            t0 = time.monotonic()
+            try:
+                resp = await self._http.request(
+                    method, rel, params=clean_params or None, json=json, headers=headers
+                )
+            except httpx.HTTPError as e:
+                log_call(method, rel, None, (time.monotonic() - t0) * 1000, attempt=attempt, error=str(e))
+                raise PdaxError(f"PDAX transport error: {e}") from e
+            log_call(method, rel, resp.status_code, (time.monotonic() - t0) * 1000, attempt=attempt)
+            return _parse(resp)
+
+        return await with_retries(_send, attempts=self._retries)
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+    async def healthcheck(self) -> None:
+        """Verify the PDAX auth handshake (cached when possible). Raises
+        PdaxError if credentials, MFA, or connectivity are not in order."""
+        await self._auth.access_headers(self._http)
 
 
 def _parse(resp: httpx.Response) -> Any:
