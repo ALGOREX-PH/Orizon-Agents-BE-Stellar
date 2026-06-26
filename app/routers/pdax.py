@@ -55,6 +55,24 @@ async def environment() -> dict:
     }
 
 
+@router.get("/health")
+async def health() -> dict:
+    """Liveness + dependency check. Probes the PDAX auth handshake and reports
+    ok / degraded / unconfigured — never exposing credentials."""
+    if not (settings.pdax_username and settings.pdax_password):
+        return {"status": "unconfigured", "environment": settings.pdax_environment}
+    try:
+        await get_pdax_client().healthcheck()
+        return {"status": "ok", "environment": settings.pdax_environment}
+    except PdaxError as e:
+        return {
+            "status": "degraded",
+            "environment": settings.pdax_environment,
+            "reason": e.message,
+            "code": e.code,
+        }
+
+
 # ── trade ───────────────────────────────────────────────────────
 @router.get("/trade/price")
 async def trade_price(
@@ -290,6 +308,9 @@ async def webhook_receive(request: Request) -> dict:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(400, detail="invalid webhook payload") from e
+    # Idempotency — a retried delivery must not advance a ramp twice.
+    if not pw.claim_event(pw.event_key(payload)):
+        return {"received": True, "duplicate": True}
     event = pw.parse_event(payload)
     # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
     # crypto deposit → sell → fiat withdraw).
