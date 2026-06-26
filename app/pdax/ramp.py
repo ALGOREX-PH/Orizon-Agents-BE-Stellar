@@ -42,28 +42,34 @@ def _num(x: object) -> str:
     return money.format_amount(x)
 
 
-async def estimate(client: PdaxClient, direction: RampDirection, amount: str) -> RampEstimate:
-    """Indicative conversion preview. `amount` is PHP for on-ramp, USDC for
-    off-ramp. `currency` denominates `quantity` (per the firm-quote v2 sample)."""
+async def estimate(
+    client: PdaxClient, direction: RampDirection, amount: str, currency: str | None = None
+) -> RampEstimate:
+    """Indicative conversion preview. `currency` denominates `amount` (per the
+    firm-quote v2 sample); default is PHP for on-ramp, USDC for off-ramp. Pass
+    `currency="USDC"` on an on-ramp to price a *target* USDC amount (e.g. a
+    workflow cost) → `php_amount` is the pesos needed."""
     if direction == "onramp":
         params = IndicativePriceV2Params(
-            side="buy", quote_currency=USDC, base_currency=PHP, currency=PHP, quantity=amount
+            side="buy", quote_currency=USDC, base_currency=PHP,
+            currency=currency or PHP, quantity=amount,
         )
         q = await trade.indicative_price_v2(client, params)
         return RampEstimate(
             direction="onramp",
-            php_amount=q.total_amount or float(amount),
+            php_amount=q.total_amount,
             usdc_amount=q.base_quantity,
             price=q.price,
         )
     params = IndicativePriceV2Params(
-        side="sell", quote_currency=USDC, base_currency=PHP, currency=USDC, quantity=amount
+        side="sell", quote_currency=USDC, base_currency=PHP,
+        currency=currency or USDC, quantity=amount,
     )
     q = await trade.indicative_price_v2(client, params)
     return RampEstimate(
         direction="offramp",
         php_amount=q.total_amount,
-        usdc_amount=q.base_quantity or float(amount),
+        usdc_amount=q.base_quantity,
         price=q.price,
     )
 
