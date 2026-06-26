@@ -16,6 +16,7 @@ from ..config import settings
 from ..pdax import (
     balances as pb,
     funding as pf,
+    ramp as pr,
     trade as pt,
     transactions as ptx,
     webhooks as pw,
@@ -25,6 +26,7 @@ from ..pdax import base_url, constants as pc, get_pdax_client
 from ..pdax.errors import PdaxError
 from ..pdax.models.common import Side
 from ..pdax.models.funding import FiatDepositRequest
+from ..pdax.models.ramp import OffRampRequest, OnRampRequest
 from ..pdax.models.trade import (
     FirmQuoteRequest,
     FirmQuoteV2Request,
@@ -289,9 +291,14 @@ async def webhook_receive(request: Request) -> dict:
     except Exception as e:
         raise HTTPException(400, detail="invalid webhook payload") from e
     event = pw.parse_event(payload)
-    # Persisting / reconciling the event with on-chain settlement is left to a
-    # follow-up; for now we acknowledge receipt with the normalized event.
-    return {"received": True, "event": event.model_dump()}
+    # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
+    # crypto deposit → sell → fiat withdraw).
+    advanced = await pr.handle_event(get_pdax_client(), event)
+    return {
+        "received": True,
+        "event": event.model_dump(),
+        "ramp": advanced.model_dump() if advanced else None,
+    }
 
 
 # ── reference (accepted values for FE dropdowns) ────────────────
@@ -326,3 +333,47 @@ async def reference_tokens() -> dict:
 async def reference_countries() -> dict:
     """Accepted country list (case-sensitive)."""
     return {"countries": sorted(pc.ACCEPTED_COUNTRIES)}
+
+
+# ── ramp (PHP <-> USDCXLM orchestration) ────────────────────────
+@router.post("/ramp/estimate")
+async def ramp_estimate(direction: str, amount: str) -> dict:
+    """Indicative conversion preview. amount = PHP (on-ramp) or USDC (off-ramp)."""
+    if direction not in {"onramp", "offramp"}:
+        raise HTTPException(400, detail="direction must be onramp or offramp")
+    try:
+        est = await pr.estimate(get_pdax_client(), direction, amount)  # type: ignore[arg-type]
+        return est.model_dump()
+    except PdaxError as e:
+        raise _fail(e) from e
+
+
+@router.post("/ramp/onramp")
+async def ramp_onramp(req: OnRampRequest) -> dict:
+    """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
+    settlement is completed by the fiat-deposit webhook."""
+    record = await pr.start_onramp(get_pdax_client(), req)
+    return record.model_dump()
+
+
+@router.post("/ramp/offramp")
+async def ramp_offramp(req: OffRampRequest) -> dict:
+    """Start a USDCXLM → PHP ramp. Returns a deposit address for the agent to
+    send USDC to; settlement is completed by the crypto-deposit webhook."""
+    record = await pr.start_offramp(get_pdax_client(), req)
+    return record.model_dump()
+
+
+@router.get("/ramp")
+async def ramp_list() -> dict:
+    """All ramps tracked this process lifetime."""
+    return {"ramps": [r.model_dump() for r in pr.ramp_store.list_all()]}
+
+
+@router.get("/ramp/{ramp_id}")
+async def ramp_status(ramp_id: str) -> dict:
+    """Current state + stage history of a single ramp."""
+    record = pr.ramp_store.get(ramp_id)
+    if record is None:
+        raise HTTPException(404, detail="ramp not found")
+    return record.model_dump()
