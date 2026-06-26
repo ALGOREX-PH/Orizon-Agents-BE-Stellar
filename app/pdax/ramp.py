@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 
 from ..config import settings
-from . import funding, money, ramp_store, trade, withdrawals
+from . import funding, money, ramp_store, trade, transactions, withdrawals
 from .client import PdaxClient
 from .errors import PdaxError
 from .models.funding import FiatDepositRequest
@@ -309,6 +309,35 @@ def _match(event: CryptoEvent | FiatEvent):
         ):
             return record, advance_offramp
     return None, None
+
+
+async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
+    """Actively check PDAX for settlement of a waiting ramp and advance it — a
+    fallback for when the webhook hasn't been delivered (e.g. staging redirect
+    flows). Safe to poll: a ramp already past `awaiting_payment` is untouched."""
+    record = ramp_store.get(ramp_id)
+    if record is None or record.status != "awaiting_payment":
+        return record
+    async with ramp_store.lock_for(record.ramp_id):
+        if record.status != "awaiting_payment":
+            return record
+        if record.direction == "onramp" and record.identifier:
+            txns = await transactions.fiat_transactions(
+                client, identifier=record.identifier, mode="CashIn"
+            )
+            if any(str(t.status).upper() == "COMPLETED" for t in txns):
+                record.status = "funded"
+                return await advance_onramp(client, record)
+        elif record.direction == "offramp" and record.deposit_address:
+            txns = await transactions.crypto_transactions(client, type="crypto_in")
+            for t in txns:
+                if (
+                    t.receiver_wallet_address == record.deposit_address
+                    and str(t.status).lower() == "completed"
+                ):
+                    record.status = "funded"
+                    return await advance_offramp(client, record)
+        return record
 
 
 async def handle_event(client: PdaxClient, event: CryptoEvent | FiatEvent) -> RampRecord | None:
