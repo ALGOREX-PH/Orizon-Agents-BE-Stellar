@@ -23,6 +23,7 @@ from .funding import (
     FiatDepositResult,
 )
 from .ramp import (
+    FundingQuote,
     OffRampRequest,
     OnRampRequest,
     RampDirection,
@@ -80,6 +81,7 @@ __all__ = [
     "RampDirection",
     "RampStatus",
     "RampEstimate",
+    "FundingQuote",
     "RampStage",
     "OnRampRequest",
     "OffRampRequest",
