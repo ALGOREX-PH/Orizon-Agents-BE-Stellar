@@ -64,6 +64,13 @@ class FakeClient:
                 "amount": 945, "method": json["method"], "status": "PENDING",
                 "retry_methods": [],
             }}
+        if "fiat/transactions" in path:
+            return {"data": [{
+                "request_id": "r", "transaction_id": 1, "amount": "200",
+                "method": "instapay_upay_cashin", "mode": "CashIn",
+                "reference_number": "ref", "status": "COMPLETED",
+                "identifier": (params or {}).get("identifier", "x"),
+            }]}
         raise AssertionError(f"unexpected path {path}")
 
 
@@ -107,6 +114,17 @@ async def main() -> None:
     assert advanced2.withdraw_request_id == "wreq1"
     print("off-ramp settled: order", advanced2.order_id,
           f"({advanced2.usdc_amount} USDC → {advanced2.php_amount} PHP)")
+
+    # ── reconcile fallback: settle without a webhook (e.g. staging) ──
+    rec3 = await ramp.start_onramp(fake, OnRampRequest(
+        php_amount="200", stellar_address="GBUYERWALLET", method="instapay_upay_cashin",
+        identifier="reconcile-1", sender_first_name="Juan", sender_last_name="Cruz",
+        beneficiary_first_name="Juan", beneficiary_last_name="Cruz",
+    ))
+    assert rec3.status == "awaiting_payment"
+    settled = await ramp.reconcile(fake, rec3.ramp_id)
+    assert settled and settled.status == "completed", settled
+    print("reconcile: detected paid deposit and settled without a webhook")
 
     # ── funding quote: pesos paid must cover the workflow ──
     fq = await ramp.funding_quote(fake, "17.18")
