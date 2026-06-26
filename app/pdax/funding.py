@@ -7,6 +7,7 @@ PDAX funding endpoints — crypto deposit address and fiat deposit (cash-in).
 """
 from __future__ import annotations
 
+from . import validation
 from .client import PdaxClient
 from .models.funding import (
     CryptoDepositAddress,
@@ -23,6 +24,7 @@ async def crypto_deposit_address(client: PdaxClient, currency: str) -> CryptoDep
 
 
 async def fiat_deposit(client: PdaxClient, req: FiatDepositRequest) -> FiatDepositResult:
+    validation.validate_fiat_deposit(req)
     data = await client.request(
         "POST", "pdax-institution/v1/fiat/deposit", json=req.model_dump(exclude_none=True)
     )
