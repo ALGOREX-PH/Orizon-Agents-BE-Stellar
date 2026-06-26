@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Safety buffer added to a fiat-funding quote (basis points) so the pesos
     # paid always cover the workflow after spread, fees, and step rounding.
     pdax_ramp_buffer_bps: int = 300  # 3%
+    # PDAX fiat-deposit floor; tiny workflows are funded at this minimum (excess
+    # stays as USDC). Reference PHP is what we price off, to clear trade minimums.
+    pdax_ramp_min_php: float = 200
+    pdax_ramp_quote_reference_php: str = "1000"
 
     @property
     def cors_origin_list(self) -> list[str]:
