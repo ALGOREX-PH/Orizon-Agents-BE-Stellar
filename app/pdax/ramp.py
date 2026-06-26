@@ -77,19 +77,30 @@ async def estimate(
 
 
 async def funding_quote(client: PdaxClient, usdc_target: str) -> FundingQuote:
-    """Pesos a buyer must pay to end up with at least `usdc_target` USDC. Adds
-    the configured safety buffer and rounds UP to whole pesos, so the amount
-    always covers the workflow after spread, fees, and step rounding."""
-    est = await estimate(client, "onramp", usdc_target, currency=USDC)
+    """Pesos a buyer must pay to end up with at least `usdc_target` USDC.
+
+    Prices off a PHP-denominated reference quote (currency=PHP — the shape PDAX's
+    v2 sample uses) rather than the tiny USDC target, which would trip PDAX's
+    per-trade minimum. Adds the safety buffer, rounds up, and floors at the PDAX
+    fiat-deposit minimum, so the amount is always payable and always covers the
+    workflow (any excess stays as USDC in the buyer's wallet)."""
+    ref = await estimate(
+        client, "onramp", settings.pdax_ramp_quote_reference_php, currency=PHP
+    )
+    price = ref.price or 0.0
     buffer_bps = max(0, settings.pdax_ramp_buffer_bps)
-    buffered = est.php_amount * (1 + buffer_bps / 10_000)
-    php_to_pay = float(money.quantize_up(buffered, "1"))
+    php_needed = float(usdc_target) * price
+    buffered = php_needed * (1 + buffer_bps / 10_000)
+    php_to_pay = max(
+        float(settings.pdax_ramp_min_php),
+        float(money.quantize_up(buffered, "1")),
+    )
     return FundingQuote(
         usdc_target=float(usdc_target),
         php_to_pay=php_to_pay,
-        php_base=est.php_amount,
+        php_base=php_needed,
         buffer_bps=buffer_bps,
-        price=est.price,
+        price=price,
     )
 
 
