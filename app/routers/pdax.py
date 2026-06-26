@@ -358,12 +358,13 @@ async def reference_countries() -> dict:
 
 # ── ramp (PHP <-> USDCXLM orchestration) ────────────────────────
 @router.post("/ramp/estimate")
-async def ramp_estimate(direction: str, amount: str) -> dict:
-    """Indicative conversion preview. amount = PHP (on-ramp) or USDC (off-ramp)."""
+async def ramp_estimate(direction: str, amount: str, currency: str | None = None) -> dict:
+    """Indicative conversion preview. `currency` denominates `amount`; pass
+    currency=USDC on an on-ramp to price a target USDC amount (workflow cost)."""
     if direction not in {"onramp", "offramp"}:
         raise HTTPException(400, detail="direction must be onramp or offramp")
     try:
-        est = await pr.estimate(get_pdax_client(), direction, amount)  # type: ignore[arg-type]
+        est = await pr.estimate(get_pdax_client(), direction, amount, currency)  # type: ignore[arg-type]
         return est.model_dump()
     except PdaxError as e:
         raise _fail(e) from e
