@@ -22,6 +22,15 @@ from .funding import (
     FiatDepositRequest,
     FiatDepositResult,
 )
+from .ramp import (
+    OffRampRequest,
+    OnRampRequest,
+    RampDirection,
+    RampEstimate,
+    RampRecord,
+    RampStage,
+    RampStatus,
+)
 from .trade import (
     FirmQuoteRequest,
     FirmQuoteV2Request,
@@ -68,6 +77,13 @@ __all__ = [
     "CryptoDepositAddress",
     "FiatDepositRequest",
     "FiatDepositResult",
+    "RampDirection",
+    "RampStatus",
+    "RampEstimate",
+    "RampStage",
+    "OnRampRequest",
+    "OffRampRequest",
+    "RampRecord",
     "FiatWithdrawRequest",
     "FiatWithdrawResult",
     "RetryMethod",
