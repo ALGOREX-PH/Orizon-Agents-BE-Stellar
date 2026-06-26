@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import uuid
 
+from ..config import settings
 from . import funding, money, ramp_store, trade, withdrawals
 from .client import PdaxClient
 from .errors import PdaxError
 from .models.funding import FiatDepositRequest
 from .models.ramp import (
+    FundingQuote,
     OffRampRequest,
     OnRampRequest,
     RampDirection,
@@ -71,6 +73,23 @@ async def estimate(
         php_amount=q.total_amount,
         usdc_amount=q.base_quantity,
         price=q.price,
+    )
+
+
+async def funding_quote(client: PdaxClient, usdc_target: str) -> FundingQuote:
+    """Pesos a buyer must pay to end up with at least `usdc_target` USDC. Adds
+    the configured safety buffer and rounds UP to whole pesos, so the amount
+    always covers the workflow after spread, fees, and step rounding."""
+    est = await estimate(client, "onramp", usdc_target, currency=USDC)
+    buffer_bps = max(0, settings.pdax_ramp_buffer_bps)
+    buffered = est.php_amount * (1 + buffer_bps / 10_000)
+    php_to_pay = float(money.quantize_up(buffered, "1"))
+    return FundingQuote(
+        usdc_target=float(usdc_target),
+        php_to_pay=php_to_pay,
+        php_base=est.php_amount,
+        buffer_bps=buffer_bps,
+        price=est.price,
     )
 
 
