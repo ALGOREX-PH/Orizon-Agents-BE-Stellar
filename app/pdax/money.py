@@ -8,7 +8,7 @@ keep amounts as `Decimal` and emit a clean fixed-point string.
 """
 from __future__ import annotations
 
-from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, InvalidOperation
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, ROUND_UP, Decimal, InvalidOperation
 
 # Normalize to this precision when formatting, to erase binary-float noise
 # (e.g. 17.179999999999998 → 17.18). Well below any crypto precision (8 dp).
@@ -29,6 +29,16 @@ def quantize(amount: object, step: str = "0.00000001") -> Decimal:
     if s <= 0:
         return d
     return (d / s).to_integral_value(rounding=ROUND_DOWN) * s
+
+
+def quantize_up(amount: object, step: str = "1") -> Decimal:
+    """Round an amount UP to a step — for a funding quote, so the buyer always
+    pays enough to cover the workflow."""
+    d = to_decimal(amount)
+    s = to_decimal(step)
+    if s <= 0:
+        return d
+    return (d / s).to_integral_value(rounding=ROUND_UP) * s
 
 
 def format_amount(amount: object) -> str:
