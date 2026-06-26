@@ -44,6 +44,18 @@ class RampEstimate(BaseModel):
     base_currency: str = "PHP"
 
 
+class FundingQuote(BaseModel):
+    """How many pesos to pay to fund a workflow priced in USDC. `php_to_pay`
+    includes a safety buffer and is rounded up, so it always covers the target
+    after spread, fees, and step rounding."""
+
+    usdc_target: float
+    php_to_pay: float
+    php_base: float  # indicative PHP for exactly usdc_target (no buffer)
+    buffer_bps: int
+    price: float  # PHP per USDC
+
+
 class RampStage(BaseModel):
     """One step within a ramp's lifecycle."""
 
