@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     pdax_max_retries: int = 3
     pdax_rate_limit_per_sec: float = 8.0
     pdax_rate_limit_burst: int = 8
+    # Safety buffer added to a fiat-funding quote (basis points) so the pesos
+    # paid always cover the workflow after spread, fees, and step rounding.
+    pdax_ramp_buffer_bps: int = 300  # 3%
 
     @property
     def cors_origin_list(self) -> list[str]:
