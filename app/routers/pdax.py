@@ -410,3 +410,16 @@ async def ramp_status(ramp_id: str) -> dict:
     if record is None:
         raise HTTPException(404, detail="ramp not found")
     return record.model_dump()
+
+
+@router.post("/ramp/{ramp_id}/reconcile")
+async def ramp_reconcile(ramp_id: str) -> dict:
+    """Check PDAX for settlement and advance the ramp — used by the UI to track
+    progress without relying on PDAX's redirect page."""
+    try:
+        record = await pr.reconcile(get_pdax_client(), ramp_id)
+    except PdaxError as e:
+        raise _fail(e) from e
+    if record is None:
+        raise HTTPException(404, detail="ramp not found")
+    return record.model_dump()
