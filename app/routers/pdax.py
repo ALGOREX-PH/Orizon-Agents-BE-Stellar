@@ -370,6 +370,17 @@ async def ramp_estimate(direction: str, amount: str, currency: str | None = None
         raise _fail(e) from e
 
 
+@router.post("/ramp/funding-quote")
+async def ramp_funding_quote(usdc: str) -> dict:
+    """Pesos to pay to fund a workflow costing `usdc` USDC — buffered + rounded
+    up so the amount always covers it."""
+    try:
+        quote = await pr.funding_quote(get_pdax_client(), usdc)
+        return quote.model_dump()
+    except PdaxError as e:
+        raise _fail(e) from e
+
+
 @router.post("/ramp/onramp")
 async def ramp_onramp(req: OnRampRequest) -> dict:
     """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
