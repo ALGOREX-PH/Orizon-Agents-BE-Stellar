@@ -47,3 +47,21 @@ def parse_event(payload: dict) -> CryptoEvent | FiatEvent:
     if asset_type == "fiat":
         return FiatEvent(**payload)
     return CryptoEvent(**payload)
+
+
+# Processed-event keys, to make webhook delivery idempotent (PDAX may retry).
+_seen_events: set[str] = set()
+
+
+def event_key(payload: dict) -> str:
+    """Stable key identifying a delivery, so retries don't double-process."""
+    fields = ("identifier", "request_id", "transaction_hash", "reference_number", "status")
+    return "|".join(str(payload.get(f, "")) for f in fields)
+
+
+def claim_event(key: str) -> bool:
+    """Record an event key. Returns False if it was already seen (duplicate)."""
+    if key in _seen_events:
+        return False
+    _seen_events.add(key)
+    return True
