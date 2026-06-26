@@ -7,12 +7,23 @@ ramps survive restarts and can be reconciled against PDAX webhooks.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
 from .models.ramp import RampRecord, RampStage
 
 _ramps: dict[str, RampRecord] = {}
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def lock_for(ramp_id: str) -> asyncio.Lock:
+    """Per-ramp lock so a duplicate/racing webhook can't advance it twice."""
+    lock = _locks.get(ramp_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[ramp_id] = lock
+    return lock
 
 
 def new_id() -> str:
