@@ -108,6 +108,13 @@ async def main() -> None:
     print("off-ramp settled: order", advanced2.order_id,
           f"({advanced2.usdc_amount} USDC → {advanced2.php_amount} PHP)")
 
+    # ── funding quote: pesos paid must cover the workflow ──
+    fq = await ramp.funding_quote(fake, "17.18")
+    assert fq.php_to_pay >= fq.php_base, fq
+    assert fq.php_to_pay == float(int(fq.php_to_pay)), "should be whole pesos"
+    print(f"funding quote: pay ₱{fq.php_to_pay} to fund {fq.usdc_target} USDC "
+          f"(base ₱{fq.php_base} + {fq.buffer_bps}bps)")
+
     print("PDAX ramp smoke: ALL OK")
 
 
