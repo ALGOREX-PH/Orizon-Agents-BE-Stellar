@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     pdax_password: str = ""  # inject via host secrets in prod
     pdax_otp_secret: str = ""  # TOTP seed if MFA is enabled (optional)
     pdax_webhook_secret: str = ""  # shared secret for webhook validation
+    # Resilience tunables (transport retry + client-side rate limiting).
+    pdax_max_retries: int = 3
+    pdax_rate_limit_per_sec: float = 8.0
+    pdax_rate_limit_burst: int = 8
 
     @property
     def cors_origin_list(self) -> list[str]:
