@@ -12,6 +12,8 @@ from __future__ import annotations
 from . import (
     balances,
     funding,
+    ramp,
+    ramp_store,
     trade,
     transactions,
     webhooks,
@@ -33,4 +35,6 @@ __all__ = [
     "transactions",
     "balances",
     "webhooks",
+    "ramp",
+    "ramp_store",
 ]
