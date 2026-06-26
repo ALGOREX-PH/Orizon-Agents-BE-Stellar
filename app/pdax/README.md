@@ -56,9 +56,31 @@ Staging/UAT require your static egress IP to be whitelisted by PDAX first.
 `handle_event` is the webhook dispatcher that matches an event to a waiting
 ramp (on-ramp by `identifier`, off-ramp by deposit address) and advances it.
 
+## Production hardening
+
+- **Resilience** (`resilience.py`) — the transport rate-limits with an async
+  token bucket and retries transient failures (network, 429/5xx, PDAX
+  `OT010032`) using exponential backoff with full jitter. 4xx validation errors
+  are never retried. Tunable via `PDAX_MAX_RETRIES` / `PDAX_RATE_LIMIT_*`.
+- **Observability** (`observability.py`) — every call logs method, path,
+  status, latency, and attempt number under the `orizon.pdax` logger.
+- **Fail-fast validation** (`validation.py`) — fiat deposit/withdraw payloads
+  are checked against the accepted-value tables (country, bank, method, source
+  of funds, purpose, relationship, fee type, sex) and the ≥ 50,000 PHP travel
+  rule *before* the network call, turning a slow 400 into an instant error.
+- **Decimal money** (`money.py`) — outbound amounts are normalized through
+  `Decimal` so float noise (`17.179999999999998`) never trips step validation.
+- **Idempotency** — webhook deliveries are deduped (`webhooks.claim_event`) and
+  ramp settlement runs under a per-ramp lock with a status re-check, so a
+  retried or racing event can never double-buy or double-withdraw.
+- **Health** — `GET /api/pdax/health` probes the auth handshake and reports
+  `ok` / `degraded` / `unconfigured` without exposing secrets.
+
 ## Verify
 
 ```
-python3 scripts/pdax_smoke.py        # offline: config, totp, models, routes
-python3 scripts/pdax_ramp_smoke.py   # offline: on-ramp + off-ramp sequencing
+python3 scripts/pdax_smoke.py            # offline: config, totp, models, routes
+python3 scripts/pdax_ramp_smoke.py       # offline: on-ramp + off-ramp sequencing
+python3 scripts/pdax_hardening_smoke.py  # offline: retry, rate-limit, validation,
+                                         #          money, dedupe, idempotency
 ```
