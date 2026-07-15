@@ -314,7 +314,13 @@ async def _settle_onchain(
         # 2. seal
         intent_hash = hashlib.sha256(plan.intent.encode("utf-8")).digest()
         agents_sym = _sv.to_vec([sc.sym(s.agent_id) for s in plan.plan.steps])
-        receipts_vec = _sv.to_vec([])
+        # charge() returns the on-chain receipt id (BytesN<16>); include it in
+        # the attestation when the tx meta decoded cleanly, else seal without.
+        receipt_rv = charge.get("return_value")
+        receipts = []
+        if isinstance(receipt_rv, (bytes, bytearray)) and len(receipt_rv) == 16:
+            receipts.append(sc.bytes16(bytes(receipt_rv)))
+        receipts_vec = _sv.to_vec(receipts)
 
         seal = await asyncio.to_thread(
             sc.invoke_with_server_key,
