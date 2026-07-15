@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..stellar import client as sc
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/stellar", tags=["stellar"])
 
 
@@ -52,7 +56,8 @@ async def read_agent(agent_id: str) -> dict:
         )
         return {"agent": result}
     except Exception as e:
-        raise HTTPException(404, f"agent read failed: {e}") from e
+        logger.exception("agent read failed for %s", agent_id)
+        raise HTTPException(404, "agent_read_failed") from e
 
 
 @router.get("/reputation/{agent_id}")
@@ -64,7 +69,8 @@ async def read_reputation(agent_id: str) -> dict:
         score = sc.simulate_read(ids.reputation_ledger, "score", [sc.sym(agent_id)])
         return {"avg_bps": avg, "score": score}
     except Exception as e:
-        raise HTTPException(502, f"reputation read failed: {e}") from e
+        logger.exception("reputation read failed for %s", agent_id)
+        raise HTTPException(502, "reputation_read_failed") from e
 
 
 @router.get("/attestation/{job_id_hex}")
@@ -81,7 +87,8 @@ async def read_attestation(job_id_hex: str) -> dict:
         )
         return {"attestation": result}
     except Exception as e:
-        raise HTTPException(400, f"attestation read failed: {e}") from e
+        logger.exception("attestation read failed for %s", job_id_hex)
+        raise HTTPException(400, "attestation_read_failed") from e
 
 
 # ── writes (user signs via Freighter) ───────────────────────────
@@ -113,7 +120,8 @@ async def build_register_agent(req: RegisterAgentReq) -> dict:
         )
         return {"xdr": xdr}
     except Exception as e:
-        raise HTTPException(400, f"build failed: {e}") from e
+        logger.exception("register-agent build failed")
+        raise HTTPException(400, "build_failed") from e
 
 
 class AuthorizeReq(BaseModel):
@@ -142,7 +150,8 @@ async def build_authorize(req: AuthorizeReq) -> dict:
         )
         return {"xdr": xdr, "expires_at": expires_at}
     except Exception as e:
-        raise HTTPException(400, f"build failed: {e}") from e
+        logger.exception("authorize build failed")
+        raise HTTPException(400, "build_failed") from e
 
 
 class SubmitReq(BaseModel):
@@ -155,7 +164,8 @@ async def submit_signed(req: SubmitReq) -> dict:
     try:
         result = sc.submit_signed_xdr(req.signed_xdr)
     except Exception as e:
-        raise HTTPException(400, f"submit failed: {e}") from e
+        logger.exception("signed xdr submit failed")
+        raise HTTPException(400, "submit_failed") from e
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
 
@@ -193,7 +203,8 @@ async def server_charge(req: ChargeReq) -> dict:
             args,
         )
     except Exception as e:
-        raise HTTPException(400, f"charge failed: {e}") from e
+        logger.exception("server charge failed")
+        raise HTTPException(400, "charge_failed") from e
 
 
 class SealReq(BaseModel):
@@ -241,7 +252,8 @@ async def server_seal(req: SealReq) -> dict:
             args,
         )
     except Exception as e:
-        raise HTTPException(400, f"seal failed: {e}") from e
+        logger.exception("server seal failed")
+        raise HTTPException(400, "seal_failed") from e
 
 
 # ── handy: new 16-byte id ──────────────────────────────────────
