@@ -36,7 +36,7 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ContractIds:
     agent_registry: str
     reputation_ledger: str
@@ -45,6 +45,7 @@ class ContractIds:
     asset_sac: str
 
 
+@lru_cache(maxsize=1)
 def contract_ids() -> ContractIds:
     return ContractIds(
         agent_registry=settings.stellar_agent_registry,
@@ -55,6 +56,7 @@ def contract_ids() -> ContractIds:
     )
 
 
+@lru_cache(maxsize=1)
 def network_passphrase() -> str:
     return settings.stellar_network_passphrase or Network.TESTNET_NETWORK_PASSPHRASE
 
