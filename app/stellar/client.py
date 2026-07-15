@@ -15,7 +15,10 @@ All amounts are i128 with Stellar's 7-decimal convention (0.012 USDC → 120000)
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from stellar_sdk import (
@@ -34,7 +37,7 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ContractIds:
     agent_registry: str
     reputation_ledger: str
@@ -43,6 +46,7 @@ class ContractIds:
     asset_sac: str
 
 
+@lru_cache(maxsize=1)
 def contract_ids() -> ContractIds:
     return ContractIds(
         agent_registry=settings.stellar_agent_registry,
@@ -53,12 +57,29 @@ def contract_ids() -> ContractIds:
     )
 
 
+@lru_cache(maxsize=1)
 def network_passphrase() -> str:
     return settings.stellar_network_passphrase or Network.TESTNET_NETWORK_PASSPHRASE
 
 
+_thread_local = threading.local()
+
+
 def _server() -> SorobanServer:
-    return SorobanServer(settings.stellar_rpc_url)
+    """Return this thread's cached SorobanServer.
+
+    stellar-sdk 13.x's SorobanServer defaults to RequestsClient, which holds a
+    requests.Session — and requests does not guarantee Session thread safety
+    (response cookie-jar updates are unsynchronized). Sharing one instance
+    across worker threads is therefore unsafe, so we cache one per thread:
+    asyncio.to_thread reuses a small executor pool, so each thread still keeps
+    its TCP+TLS connections alive across calls.
+    """
+    server = getattr(_thread_local, "server", None)
+    if server is None:
+        server = SorobanServer(settings.stellar_rpc_url)
+        _thread_local.server = server
+    return server
 
 
 # ── reads ──────────────────────────────────────────────────────────────
@@ -103,11 +124,15 @@ def simulate_read(
     return scval.to_native(sim.results[0].xdr)
 
 
+@lru_cache(maxsize=1)
 def _signer_keypair() -> Keypair:
     """
     Build a Keypair from STELLAR_SIGNING_KEY, accepting either:
       - an S… secret key (56 chars), OR
       - a 12/24-word BIP-39 mnemonic seed phrase (words separated by spaces).
+
+    Memoized: the signing key is immutable at runtime, so we derive once.
+    (lru_cache does not cache exceptions, so an unset key keeps raising.)
     """
     secret = settings.stellar_signing_key or ""
     secret = secret.strip()
@@ -128,6 +153,11 @@ def _signer_keypair() -> Keypair:
         raise RuntimeError(
             f"STELLAR_SIGNING_KEY must be an S… secret or a 12/24-word mnemonic ({e})"
         ) from e
+
+
+def signer_public_key() -> str:
+    """Public key (G…) of the backend signing keypair, from the cached Keypair."""
+    return _signer_keypair().public_key
 
 
 # ── writes (backend-signed) ─────────────────────────────────────────────
@@ -166,7 +196,6 @@ def invoke_with_server_key(
         raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
 
     # Poll briefly for final status.
-    import time
     for _ in range(30):
         status = server.get_transaction(sent.hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
@@ -217,8 +246,6 @@ def build_invoke_xdr(
 
 def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     """Submit a user-signed (via Freighter) prepared transaction."""
-    import time
-
     from stellar_sdk import TransactionEnvelope
 
     server = _server()

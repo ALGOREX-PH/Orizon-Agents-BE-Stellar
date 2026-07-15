@@ -37,17 +37,50 @@ cp .env.example .env
 
 | method | path | purpose |
 | --- | --- | --- |
+| GET  | `/health`                            | liveness probe |
+| GET  | `/readiness`                         | readiness probe — lists missing Stellar settings |
 | GET  | `/api/agents`                        | registry listing |
 | GET  | `/api/agents/{id}`                   | agent detail |
 | POST | `/api/orchestrator/decompose`        | intent → plan (real LLM) |
 | POST | `/api/orchestrator/execute`          | run a plan → `{task_id}` |
 | GET  | `/api/tasks`                         | recent tasks |
 | GET  | `/api/tasks/{id}`                    | task detail |
+| GET  | `/api/tasks/{id}/artifact`           | task deliverable (the actual artifact) |
 | GET  | `/api/trace/{task_id}`               | full trace snapshot |
 | GET  | `/api/trace/{task_id}/stream`        | SSE live trace |
 | GET  | `/api/metrics/overview`              | dashboard overview |
 | GET  | `/api/flow/default`                  | default DAG |
 | POST | `/api/payments/x402`                 | simulated HTTP 402 flow |
+| GET  | `/api/stellar/network`               | testnet contract IDs the FE renders |
+| GET  | `/api/stellar/agent/{id}`            | read an agent from AgentRegistry |
+| GET  | `/api/stellar/reputation/{id}`       | ReputationLedger avg + score |
+| GET  | `/api/stellar/attestation/{job_id}`  | on-chain attestation by hex job id |
+| POST | `/api/stellar/build/register-agent`  | unsigned XDR — owner signs via Freighter |
+| POST | `/api/stellar/build/authorize`       | unsigned XDR — x402 pre-auth |
+| POST | `/api/stellar/submit`                | submit a Freighter-signed XDR |
+| POST | `/api/stellar/server/charge`         | backend-signed escrow charge (needs `X-API-Key`) |
+| POST | `/api/stellar/server/seal`           | backend-signed attestation seal (needs `X-API-Key`) |
+| GET  | `/api/stellar/new-id`                | fresh random 16-byte id for job/auth ids |
+| *    | `/api/pdax/*`                        | PDAX PHP↔crypto surface: trade, fiat/crypto funding, ramps, webhooks, reference data |
+
+## Testing
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+21 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+
+## Environment variables
+
+| name | default | purpose |
+| --- | --- | --- |
+| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` require a matching `X-API-Key` header |
+| `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
+| `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
+
+Everything else (model IDs, contract addresses, RPC, PDAX sandbox) is documented in `.env.example` — copy it to `.env` and fill in what you need.
 
 ## Deploy — Render (recommended)
 

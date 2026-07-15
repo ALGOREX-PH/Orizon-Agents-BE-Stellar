@@ -323,17 +323,29 @@ async def webhook_receive(request: Request) -> dict:
 
 
 # ── reference (accepted values for FE dropdowns) ────────────────
+# The constant tables are immutable frozensets — sort them once at import
+# time instead of on every request.
+_SOURCE_OF_FUNDS_SORTED = sorted(pc.SOURCE_OF_FUNDS)
+_PURPOSE_SORTED = sorted(pc.PURPOSE)
+_RELATIONSHIP_SORTED = sorted(pc.RELATIONSHIP)
+_FEE_TYPE_SORTED = sorted(pc.FEE_TYPE)
+_SEX_SORTED = sorted(pc.SEX)
+_FIAT_WITHDRAWAL_METHODS_SORTED = sorted(pc.FIAT_WITHDRAWAL_METHODS)
+_STELLAR_TOKENS_SORTED = sorted(pc.STELLAR_TOKENS)
+_ACCEPTED_COUNTRIES_SORTED = sorted(pc.ACCEPTED_COUNTRIES)
+
+
 @router.get("/reference")
 async def reference() -> dict:
     """All PDAX accepted-value tables the frontend forms need."""
     return {
-        "source_of_funds": sorted(pc.SOURCE_OF_FUNDS),
-        "purpose": sorted(pc.PURPOSE),
-        "relationship": sorted(pc.RELATIONSHIP),
-        "fee_type": sorted(pc.FEE_TYPE),
-        "sex": sorted(pc.SEX),
+        "source_of_funds": _SOURCE_OF_FUNDS_SORTED,
+        "purpose": _PURPOSE_SORTED,
+        "relationship": _RELATIONSHIP_SORTED,
+        "fee_type": _FEE_TYPE_SORTED,
+        "sex": _SEX_SORTED,
         "fiat_deposit_methods": pc.FIAT_DEPOSIT_METHODS,
-        "fiat_withdrawal_methods": sorted(pc.FIAT_WITHDRAWAL_METHODS),
+        "fiat_withdrawal_methods": _FIAT_WITHDRAWAL_METHODS_SORTED,
         "travel_rule_threshold_php": pc.TRAVEL_RULE_THRESHOLD_PHP,
     }
 
@@ -347,13 +359,13 @@ async def reference_banks() -> dict:
 @router.get("/reference/tokens")
 async def reference_tokens() -> dict:
     """Supported crypto token → network (Stellar tokens flagged)."""
-    return {"tokens": pc.TOKEN_NETWORKS, "stellar": sorted(pc.STELLAR_TOKENS)}
+    return {"tokens": pc.TOKEN_NETWORKS, "stellar": _STELLAR_TOKENS_SORTED}
 
 
 @router.get("/reference/countries")
 async def reference_countries() -> dict:
     """Accepted country list (case-sensitive)."""
-    return {"countries": sorted(pc.ACCEPTED_COUNTRIES)}
+    return {"countries": _ACCEPTED_COUNTRIES_SORTED}
 
 
 # ── ramp (PHP <-> USDCXLM orchestration) ────────────────────────

@@ -13,10 +13,13 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..security import require_api_key
+from ..stellar import cache as rcache
 from ..stellar import client as sc
 
 import logging
@@ -25,10 +28,51 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stellar", tags=["stellar"])
 
+# ── response models (shapes match the existing payloads exactly) ──
+class NetworkInfo(BaseModel):
+    network: str
+    rpc_url: str
+    network_passphrase: str
+    admin: str
+    asset: str
+    asset_sac: str
+    contracts: dict[str, str]
+
+
+class AgentRead(BaseModel):
+    agent: Any
+
+
+class ReputationRead(BaseModel):
+    avg_bps: Any
+    score: Any
+
+
+class AttestationRead(BaseModel):
+    attestation: Any
+
+
+class XdrResponse(BaseModel):
+    xdr: str
+
+
+class AuthorizeXdrResponse(BaseModel):
+    xdr: str
+    expires_at: int
+
+
+class NewIdResponse(BaseModel):
+    id_hex: str
+
+
+# FE polls the read routes; identical simulate calls within this window are
+# served from a tiny in-process cache instead of re-hitting Soroban RPC.
+READ_TTL_SECONDS = 3.0
+
 
 # ── meta ────────────────────────────────────────────────────────
-@router.get("/network")
-async def network() -> dict:
+@router.get("/network", response_model=NetworkInfo)
+async def network() -> NetworkInfo:
     ids = sc.contract_ids()
     return {
         "network": settings.stellar_network,
@@ -47,32 +91,42 @@ async def network() -> dict:
 
 
 # ── reads ───────────────────────────────────────────────────────
-@router.get("/agent/{agent_id}")
-async def read_agent(agent_id: str) -> dict:
+@router.get("/agent/{agent_id}", response_model=AgentRead)
+async def read_agent(agent_id: str) -> AgentRead:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
-        result = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().agent_registry,
-            "get",
-            [sc.sym(agent_id)],
-        )
+        async def _fetch():
+            return await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().agent_registry,
+                "get",
+                [sc.sym(agent_id)],
+            )
+
+        result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
         return {"agent": result}
     except Exception as e:
         logger.exception("agent read failed for %s", agent_id)
         raise HTTPException(404, "agent_read_failed") from e
 
 
-@router.get("/reputation/{agent_id}")
-async def read_reputation(agent_id: str) -> dict:
+@router.get("/reputation/{agent_id}", response_model=ReputationRead)
+async def read_reputation(agent_id: str) -> ReputationRead:
     """Read ReputationLedger.avg_bps(id) + .score(id)."""
     try:
-        ids = sc.contract_ids()
-        avg = await asyncio.to_thread(
-            sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
-        )
-        score = await asyncio.to_thread(
-            sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+        async def _fetch():
+            ids = sc.contract_ids()
+            return await asyncio.gather(
+                asyncio.to_thread(
+                    sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
+                ),
+                asyncio.to_thread(
+                    sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+                ),
+            )
+
+        avg, score = await rcache.get_or_set(
+            f"reputation:{agent_id}", READ_TTL_SECONDS, _fetch
         )
         return {"avg_bps": avg, "score": score}
     except Exception as e:
@@ -80,18 +134,24 @@ async def read_reputation(agent_id: str) -> dict:
         raise HTTPException(502, "reputation_read_failed") from e
 
 
-@router.get("/attestation/{job_id_hex}")
-async def read_attestation(job_id_hex: str) -> dict:
+@router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
+async def read_attestation(job_id_hex: str) -> AttestationRead:
     """Read an on-chain Attestation by hex-encoded 16-byte job_id."""
     try:
         jid = bytes.fromhex(job_id_hex)
         if len(jid) != 16:
             raise ValueError("job_id must be 32 hex chars (16 bytes)")
-        result = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().attestation_registry,
-            "get",
-            [sc.bytes16(jid)],
+
+        async def _fetch():
+            return await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().attestation_registry,
+                "get",
+                [sc.bytes16(jid)],
+            )
+
+        result = await rcache.get_or_set(
+            f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch
         )
         return {"attestation": result}
     except Exception as e:
@@ -110,8 +170,8 @@ class RegisterAgentReq(BaseModel):
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
-@router.post("/build/register-agent")
-async def build_register_agent(req: RegisterAgentReq) -> dict:
+@router.post("/build/register-agent", response_model=XdrResponse)
+async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
     try:
         from stellar_sdk import scval as _sv
@@ -142,8 +202,8 @@ class AuthorizeReq(BaseModel):
     ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
 
-@router.post("/build/authorize")
-async def build_authorize(req: AuthorizeReq) -> dict:
+@router.post("/build/authorize", response_model=AuthorizeXdrResponse)
+async def build_authorize(req: AuthorizeReq) -> AuthorizeXdrResponse:
     """Build unsigned XDR for PaymentEscrow.authorize (x402 pre-auth)."""
     try:
         expires_at = int(time.time()) + req.ttl_seconds
@@ -202,8 +262,7 @@ async def server_charge(req: ChargeReq) -> dict:
         if len(aid) != 16 or len(jid) != 16:
             raise ValueError("ids must be 32 hex chars")
 
-        from stellar_sdk import Keypair
-        caller = Keypair.from_secret(settings.stellar_signing_key).public_key
+        caller = sc._signer_keypair().public_key
 
         args = [
             sc.addr(caller),
@@ -239,9 +298,9 @@ async def server_seal(req: SealReq) -> dict:
     if not settings.stellar_signing_key:
         raise HTTPException(503, "backend signing key not configured")
     try:
-        from stellar_sdk import Keypair, scval as _sv
+        from stellar_sdk import scval as _sv
 
-        caller = Keypair.from_secret(settings.stellar_signing_key).public_key
+        caller = sc._signer_keypair().public_key
         jid = bytes.fromhex(req.job_id_hex)
         ih = bytes.fromhex(req.intent_hash_hex)
         if len(jid) != 16 or len(ih) != 32:
@@ -275,7 +334,7 @@ async def server_seal(req: SealReq) -> dict:
 
 
 # ── handy: new 16-byte id ──────────────────────────────────────
-@router.get("/new-id")
-async def new_id() -> dict:
+@router.get("/new-id", response_model=NewIdResponse)
+async def new_id() -> NewIdResponse:
     """Produce a random 16-byte id (hex) — useful for job_id / auth_id."""
     return {"id_hex": secrets.token_hex(16)}
