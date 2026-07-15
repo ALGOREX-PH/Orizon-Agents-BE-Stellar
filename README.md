@@ -63,6 +63,25 @@ cp .env.example .env
 | GET  | `/api/stellar/new-id`                | fresh random 16-byte id for job/auth ids |
 | *    | `/api/pdax/*`                        | PDAX PHP↔crypto surface: trade, fiat/crypto funding, ramps, webhooks, reference data |
 
+## Testing
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+21 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+
+## Environment variables
+
+| name | default | purpose |
+| --- | --- | --- |
+| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` require a matching `X-API-Key` header |
+| `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
+| `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
+
+Everything else (model IDs, contract addresses, RPC, PDAX sandbox) is documented in `.env.example` — copy it to `.env` and fill in what you need.
+
 ## Deploy — Render (recommended)
 
 The repo ships a `render.yaml` blueprint + a `runtime.txt` pinning Python 3.12. Render reads them on first connect.
