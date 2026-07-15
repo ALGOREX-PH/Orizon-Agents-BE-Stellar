@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
@@ -49,6 +50,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["content-type", "authorization", "x-api-key"],
 )
+
+# Added last → runs outermost, so artifact/trace payloads (30–76 kB) leave the
+# stack compressed while the rate limiter still sees the raw request.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
