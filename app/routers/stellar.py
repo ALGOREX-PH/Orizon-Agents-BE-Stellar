@@ -101,11 +101,13 @@ async def read_attestation(job_id_hex: str) -> dict:
 
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
-    owner: str = Field(..., description="G... address of the agent owner")
-    agent_id: str
-    name: str
-    skills: list[str] = Field(default_factory=list)
-    price_usdc: float
+    owner: str = Field(
+        ..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner"
+    )
+    agent_id: str = Field(..., min_length=1, max_length=32)
+    name: str = Field(..., min_length=1, max_length=100)
+    skills: list[str] = Field(default_factory=list, max_length=16)
+    price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
 @router.post("/build/register-agent")
@@ -134,10 +136,10 @@ async def build_register_agent(req: RegisterAgentReq) -> dict:
 
 
 class AuthorizeReq(BaseModel):
-    payer: str
-    agent_id: str
-    max_amount_usdc: float
-    ttl_seconds: int = 300
+    payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
+    agent_id: str = Field(..., min_length=1, max_length=32)
+    max_amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 @router.post("/build/authorize")
@@ -182,9 +184,9 @@ async def submit_signed(req: SubmitReq) -> dict:
 
 # ── writes (backend signs with STELLAR_SIGNING_KEY) ──────────────
 class ChargeReq(BaseModel):
-    auth_id_hex: str  # 32 hex chars
-    amount_usdc: float
-    job_id_hex: str   # 32 hex chars
+    auth_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
+    amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+    job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
 
 
 @router.post("/server/charge", dependencies=[Depends(require_api_key)])
@@ -221,12 +223,14 @@ async def server_charge(req: ChargeReq) -> dict:
 
 
 class SealReq(BaseModel):
-    job_id_hex: str
-    orchestrator: str  # G-address of the workflow owner
-    intent_hash_hex: str  # 64 hex chars
-    agents: list[str]
-    receipts_hex: list[str]  # each 32 hex chars
-    total_spent_usdc: float
+    job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
+    orchestrator: str = Field(
+        ..., pattern=r"^G[A-Z2-7]{55}$"
+    )  # G-address of the workflow owner
+    intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
+    agents: list[str] = Field(..., max_length=32)
+    receipts_hex: list[str] = Field(..., max_length=32)  # each 32 hex chars
+    total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 
 @router.post("/server/seal", dependencies=[Depends(require_api_key)])
