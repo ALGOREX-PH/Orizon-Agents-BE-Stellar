@@ -6,10 +6,25 @@ feeds a deterministic 6-step plan with a guaranteed-quality artifact.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+@lru_cache(maxsize=32)
+def _read_artifact_file(path: str) -> str | None:
+    """Read a baked artifact file once and cache it by absolute path.
+
+    Baked artifacts are immutable for the lifetime of the process, so the
+    disk read only needs to happen on the first kit execution. Returns None
+    if the file doesn't exist.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return None
+    return p.read_text(encoding="utf-8")
 
 
 class BrandSpec(BaseModel):
@@ -88,9 +103,9 @@ class DemoKit(BaseModel):
         if not self.artifact_path:
             return None
         p = Path(__file__).parent / "artifacts" / self.artifact_path
-        if not p.is_file():
+        html = _read_artifact_file(str(p))
+        if html is None:
             return None
-        html = p.read_text(encoding="utf-8")
         return {
             "title": self.brand.name,
             "summary": self.brand.tagline,
