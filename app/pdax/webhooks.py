@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections import OrderedDict
 
 from ..config import settings
 from .config import allow_unsigned_webhooks
@@ -53,7 +54,10 @@ def parse_event(payload: dict) -> CryptoEvent | FiatEvent:
 
 
 # Processed-event keys, to make webhook delivery idempotent (PDAX may retry).
-_seen_events: set[str] = set()
+# Bounded LRU (insertion-ordered dict) so a long-lived process can't grow it
+# forever; retries arrive within minutes, so the last 10k keys is ample.
+_SEEN_EVENTS_MAX = 10_000
+_seen_events: OrderedDict[str, None] = OrderedDict()
 
 
 def event_key(payload: dict) -> str:
@@ -65,6 +69,9 @@ def event_key(payload: dict) -> str:
 def claim_event(key: str) -> bool:
     """Record an event key. Returns False if it was already seen (duplicate)."""
     if key in _seen_events:
+        _seen_events.move_to_end(key)
         return False
-    _seen_events.add(key)
+    _seen_events[key] = None
+    while len(_seen_events) > _SEEN_EVENTS_MAX:
+        _seen_events.popitem(last=False)
     return True
