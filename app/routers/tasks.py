@@ -1,9 +1,25 @@
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from ..schemas import Task
 from ..state import state
 
 router = APIRouter(tags=["tasks"])
+
+
+class ArtifactResponse(BaseModel):
+    """Response shape for /tasks/{task_id}/artifact.
+
+    Mirrors the fields the frontend consumes: `artifact` carries the
+    CodeArtifact-shaped dict (`preview_html` for the iframe, `files[]` for
+    the code viewer), plus the on-chain charge/proof transaction hashes.
+    """
+
+    artifact: Optional[dict] = None
+    charge_tx: Optional[str] = None
+    proof_tx: Optional[str] = None
 
 
 @router.get("/tasks", response_model=list[Task])
@@ -19,10 +35,12 @@ async def get_task(task_id: str) -> Task:
     return task
 
 
-@router.get("/tasks/{task_id}/artifact")
-async def get_artifact(task_id: str) -> dict:
+@router.get("/tasks/{task_id}/artifact", response_model=ArtifactResponse)
+async def get_artifact(task_id: str) -> ArtifactResponse:
     """Returns the code artifact produced by the workflow, if any."""
     task = state.tasks.get(task_id)
     if task is None:
         raise HTTPException(404, f"unknown task: {task_id}")
-    return {"artifact": task.artifact, "charge_tx": task.charge_tx, "proof_tx": task.proof_tx}
+    return ArtifactResponse(
+        artifact=task.artifact, charge_tx=task.charge_tx, proof_tx=task.proof_tx
+    )
