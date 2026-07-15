@@ -204,8 +204,7 @@ async def server_charge(req: ChargeReq) -> dict:
         if len(aid) != 16 or len(jid) != 16:
             raise ValueError("ids must be 32 hex chars")
 
-        from stellar_sdk import Keypair
-        caller = Keypair.from_secret(settings.stellar_signing_key).public_key
+        caller = sc._signer_keypair().public_key
 
         args = [
             sc.addr(caller),
@@ -241,9 +240,9 @@ async def server_seal(req: SealReq) -> dict:
     if not settings.stellar_signing_key:
         raise HTTPException(503, "backend signing key not configured")
     try:
-        from stellar_sdk import Keypair, scval as _sv
+        from stellar_sdk import scval as _sv
 
-        caller = Keypair.from_secret(settings.stellar_signing_key).public_key
+        caller = sc._signer_keypair().public_key
         jid = bytes.fromhex(req.job_id_hex)
         ih = bytes.fromhex(req.intent_hash_hex)
         if len(jid) != 16 or len(ih) != 32:
