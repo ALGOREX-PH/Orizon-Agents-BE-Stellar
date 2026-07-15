@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from stellar_sdk import (
@@ -120,11 +121,15 @@ def simulate_read(
     return scval.to_native(sim.results[0].xdr)
 
 
+@lru_cache(maxsize=1)
 def _signer_keypair() -> Keypair:
     """
     Build a Keypair from STELLAR_SIGNING_KEY, accepting either:
       - an S… secret key (56 chars), OR
       - a 12/24-word BIP-39 mnemonic seed phrase (words separated by spaces).
+
+    Memoized: the signing key is immutable at runtime, so we derive once.
+    (lru_cache does not cache exceptions, so an unset key keeps raising.)
     """
     secret = settings.stellar_signing_key or ""
     secret = secret.strip()
@@ -145,6 +150,11 @@ def _signer_keypair() -> Keypair:
         raise RuntimeError(
             f"STELLAR_SIGNING_KEY must be an S… secret or a 12/24-word mnemonic ({e})"
         ) from e
+
+
+def signer_public_key() -> str:
+    """Public key (G…) of the backend signing keypair, from the cached Keypair."""
+    return _signer_keypair().public_key
 
 
 # ── writes (backend-signed) ─────────────────────────────────────────────
