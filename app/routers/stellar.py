@@ -8,6 +8,7 @@ Write routes have two shapes:
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 
@@ -50,7 +51,8 @@ async def network() -> dict:
 async def read_agent(agent_id: str) -> dict:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
-        result = sc.simulate_read(
+        result = await asyncio.to_thread(
+            sc.simulate_read,
             sc.contract_ids().agent_registry,
             "get",
             [sc.sym(agent_id)],
@@ -66,8 +68,12 @@ async def read_reputation(agent_id: str) -> dict:
     """Read ReputationLedger.avg_bps(id) + .score(id)."""
     try:
         ids = sc.contract_ids()
-        avg = sc.simulate_read(ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)])
-        score = sc.simulate_read(ids.reputation_ledger, "score", [sc.sym(agent_id)])
+        avg = await asyncio.to_thread(
+            sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
+        )
+        score = await asyncio.to_thread(
+            sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+        )
         return {"avg_bps": avg, "score": score}
     except Exception as e:
         logger.exception("reputation read failed for %s", agent_id)
@@ -81,7 +87,8 @@ async def read_attestation(job_id_hex: str) -> dict:
         jid = bytes.fromhex(job_id_hex)
         if len(jid) != 16:
             raise ValueError("job_id must be 32 hex chars (16 bytes)")
-        result = sc.simulate_read(
+        result = await asyncio.to_thread(
+            sc.simulate_read,
             sc.contract_ids().attestation_registry,
             "get",
             [sc.bytes16(jid)],
@@ -113,7 +120,8 @@ async def build_register_agent(req: RegisterAgentReq) -> dict:
             _sv.to_vec([sc.sym(s) for s in req.skills]),
             sc.i128(sc.usdc_to_i128(req.price_usdc)),
         ]
-        xdr = sc.build_invoke_xdr(
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
             sc.contract_ids().agent_registry,
             "register",
             args,
@@ -143,7 +151,8 @@ async def build_authorize(req: AuthorizeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.max_amount_usdc)),
             sc.u64(expires_at),
         ]
-        xdr = sc.build_invoke_xdr(
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
             sc.contract_ids().payment_escrow,
             "authorize",
             args,
@@ -163,7 +172,7 @@ class SubmitReq(BaseModel):
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
     try:
-        result = sc.submit_signed_xdr(req.signed_xdr)
+        result = await asyncio.to_thread(sc.submit_signed_xdr, req.signed_xdr)
     except Exception as e:
         logger.exception("signed xdr submit failed")
         raise HTTPException(400, "submit_failed") from e
@@ -200,7 +209,8 @@ async def server_charge(req: ChargeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.amount_usdc)),
             sc.bytes16(jid),
         ]
-        return sc.invoke_with_server_key(
+        return await asyncio.to_thread(
+            sc.invoke_with_server_key,
             sc.contract_ids().payment_escrow,
             "charge",
             args,
@@ -249,7 +259,8 @@ async def server_seal(req: SealReq) -> dict:
             _sv.to_vec(receipts),
             sc.i128(sc.usdc_to_i128(req.total_spent_usdc)),
         ]
-        return sc.invoke_with_server_key(
+        return await asyncio.to_thread(
+            sc.invoke_with_server_key,
             sc.contract_ids().attestation_registry,
             "seal",
             args,
