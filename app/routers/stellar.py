@@ -68,11 +68,13 @@ async def read_reputation(agent_id: str) -> dict:
     """Read ReputationLedger.avg_bps(id) + .score(id)."""
     try:
         ids = sc.contract_ids()
-        avg = await asyncio.to_thread(
-            sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
-        )
-        score = await asyncio.to_thread(
-            sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+        avg, score = await asyncio.gather(
+            asyncio.to_thread(
+                sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
+            ),
+            asyncio.to_thread(
+                sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+            ),
         )
         return {"avg_bps": avg, "score": score}
     except Exception as e:
