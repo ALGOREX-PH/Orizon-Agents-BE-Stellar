@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import settings
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
+from .security import RateLimitMiddleware
 from .seed import seed_registry
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -23,6 +32,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Registered before CORS so CORS wraps it and 429 responses still carry
+# the Access-Control-Allow-Origin header the browser needs to read them.
+app.add_middleware(RateLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -30,10 +43,22 @@ app.add_middleware(
     # re-list them in CORS_ORIGINS. Tighten this regex once the final prod
     # subdomain is known (e.g. r"^https://orizon-agents(-.*)?\.vercel\.app$").
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # The API is token/header-based — no cookies — so credentials stay off,
+    # and only the methods/headers the frontend actually sends are allowed.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["content-type", "authorization", "x-api-key"],
 )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log the full traceback server-side; never leak exception text to clients."""
+    logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "internal_error", "message": "internal server error"}},
+    )
+
 
 app.include_router(agents.router, prefix="/api")
 app.include_router(orchestrator.router, prefix="/api")
@@ -49,3 +74,25 @@ app.include_router(pdax.router, prefix="/api")
 @app.get("/")
 async def root() -> dict[str, str]:
     return {"service": "orizon-agents", "status": "online"}
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Liveness probe — process is up and serving."""
+    return {"status": "ok"}
+
+
+@app.get("/readiness")
+async def readiness() -> JSONResponse:
+    """Readiness probe — reports which required Stellar settings are missing."""
+    missing: list[str] = []
+    if not settings.stellar_signing_key:
+        missing.append("STELLAR_SIGNING_KEY")
+    if not settings.stellar_rpc_url:
+        missing.append("STELLAR_RPC_URL")
+    if missing:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "missing": missing},
+        )
+    return JSONResponse(content={"status": "ready", "missing": []})

@@ -11,11 +11,14 @@ the original draft so the user is never worse off.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .base import Worker
 from .code_critic import CodeCritic
 from .code_validator import validate_html
+
+logger = logging.getLogger(__name__)
 
 
 class CodeCriticWorker(Worker):
@@ -129,6 +132,9 @@ class CodeCriticWorker(Worker):
                     )
                 final_artifact = revised
         except Exception as e:  # pragma: no cover — never fail the workflow
+            logger.warning(
+                "code.critic refine failed, keeping draft artifact: %s", e, exc_info=True
+            )
             critic_notes.append(f"critic failed: {type(e).__name__}: {str(e)[:80]}")
 
         title = final_artifact.get("title", "artifact")

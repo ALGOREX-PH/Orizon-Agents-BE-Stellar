@@ -119,9 +119,13 @@ class DecomposeResponse(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    plan_id: str
-    auth_id_hex: Optional[str] = None  # 32-hex auth id from PaymentEscrow.authorize
-    payer: Optional[str] = None         # G... address of the payer (from Freighter)
+    plan_id: str = Field(..., max_length=64)
+    auth_id_hex: Optional[str] = Field(
+        default=None, pattern=r"^[0-9a-fA-F]{32}$"
+    )  # 32-hex auth id from PaymentEscrow.authorize
+    payer: Optional[str] = Field(
+        default=None, pattern=r"^G[A-Z2-7]{55}$"
+    )  # G... address of the payer (from Freighter)
 
 
 class ExecuteResponse(BaseModel):
@@ -129,8 +133,8 @@ class ExecuteResponse(BaseModel):
 
 
 class X402Request(BaseModel):
-    agent_id: str
-    amount_usdc: float
+    agent_id: str = Field(..., max_length=64)
+    amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
 class X402Response(BaseModel):

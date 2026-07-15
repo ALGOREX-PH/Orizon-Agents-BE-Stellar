@@ -14,6 +14,7 @@ All amounts are i128 with Stellar's 7-decimal convention (0.012 USDC → 120000)
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,8 @@ from stellar_sdk.exceptions import PrepareTransactionException
 from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
 
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -214,7 +217,6 @@ def build_invoke_xdr(
 
 def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     """Submit a user-signed (via Freighter) prepared transaction."""
-    import sys
     import time
 
     from stellar_sdk import TransactionEnvelope
@@ -223,7 +225,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     try:
         env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
     except Exception as e:
-        print(f"[stellar.submit] bad XDR: {e}", file=sys.stderr)
+        logger.warning("[stellar.submit] bad XDR: %s", e)
         raise RuntimeError(
             f"bad signed XDR (likely wrong networkPassphrase or malformed): {e}"
         ) from e
@@ -235,7 +237,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
             f"error={getattr(sent, 'error_result_xdr', None)} "
             f"hash={sent.hash}"
         )
-        print(f"[stellar.submit] send failed: {detail}", file=sys.stderr)
+        logger.error("[stellar.submit] send failed: %s", detail)
         raise RuntimeError(f"submit failed ({detail})")
 
     for _ in range(30):
@@ -246,10 +248,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
                 rv = rv.hex()
             diag = _extract_diagnostics(status)
             if status.status == GetTransactionStatus.FAILED:
-                print(
-                    f"[stellar.submit] tx {sent.hash} FAILED · {diag}",
-                    file=sys.stderr,
-                )
+                logger.error("[stellar.submit] tx %s FAILED · %s", sent.hash, diag)
             return {
                 "hash": sent.hash,
                 "status": status.status.value,
@@ -309,8 +308,7 @@ def _extract_return_value(result_meta_xdr: str | None) -> Any:
             if soroban and getattr(soroban, "return_value", None) is not None:
                 return scval.to_native(soroban.return_value)
     except Exception as e:
-        import sys
-        print(f"[stellar.submit] meta decode failed: {e}", file=sys.stderr)
+        logger.warning("[stellar.submit] meta decode failed: %s", e)
     return None
 
 

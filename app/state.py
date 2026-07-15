@@ -8,6 +8,13 @@ from .schemas import Agent, StoredPlan, Task, TraceLine
 
 
 class AppState:
+    """Process-local store for agents, tasks, plans, and traces.
+
+    Single-worker by design: render.yaml pins uvicorn to --workers 1, so all
+    state lives in this one process. Contents are lost on restart; durable
+    facts (payments, attestations, reputation) live on-chain, not here.
+    """
+
     def __init__(self) -> None:
         self.agents: dict[str, Agent] = {}
         self.tasks: dict[str, Task] = {}

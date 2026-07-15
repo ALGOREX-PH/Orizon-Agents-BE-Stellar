@@ -8,14 +8,20 @@ Write routes have two shapes:
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import settings
+from ..security import require_api_key
 from ..stellar import client as sc
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stellar", tags=["stellar"])
 
@@ -45,14 +51,16 @@ async def network() -> dict:
 async def read_agent(agent_id: str) -> dict:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
-        result = sc.simulate_read(
+        result = await asyncio.to_thread(
+            sc.simulate_read,
             sc.contract_ids().agent_registry,
             "get",
             [sc.sym(agent_id)],
         )
         return {"agent": result}
     except Exception as e:
-        raise HTTPException(404, f"agent read failed: {e}") from e
+        logger.exception("agent read failed for %s", agent_id)
+        raise HTTPException(404, "agent_read_failed") from e
 
 
 @router.get("/reputation/{agent_id}")
@@ -60,11 +68,16 @@ async def read_reputation(agent_id: str) -> dict:
     """Read ReputationLedger.avg_bps(id) + .score(id)."""
     try:
         ids = sc.contract_ids()
-        avg = sc.simulate_read(ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)])
-        score = sc.simulate_read(ids.reputation_ledger, "score", [sc.sym(agent_id)])
+        avg = await asyncio.to_thread(
+            sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
+        )
+        score = await asyncio.to_thread(
+            sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+        )
         return {"avg_bps": avg, "score": score}
     except Exception as e:
-        raise HTTPException(502, f"reputation read failed: {e}") from e
+        logger.exception("reputation read failed for %s", agent_id)
+        raise HTTPException(502, "reputation_read_failed") from e
 
 
 @router.get("/attestation/{job_id_hex}")
@@ -74,23 +87,27 @@ async def read_attestation(job_id_hex: str) -> dict:
         jid = bytes.fromhex(job_id_hex)
         if len(jid) != 16:
             raise ValueError("job_id must be 32 hex chars (16 bytes)")
-        result = sc.simulate_read(
+        result = await asyncio.to_thread(
+            sc.simulate_read,
             sc.contract_ids().attestation_registry,
             "get",
             [sc.bytes16(jid)],
         )
         return {"attestation": result}
     except Exception as e:
-        raise HTTPException(400, f"attestation read failed: {e}") from e
+        logger.exception("attestation read failed for %s", job_id_hex)
+        raise HTTPException(400, "attestation_read_failed") from e
 
 
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
-    owner: str = Field(..., description="G... address of the agent owner")
-    agent_id: str
-    name: str
-    skills: list[str] = Field(default_factory=list)
-    price_usdc: float
+    owner: str = Field(
+        ..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner"
+    )
+    agent_id: str = Field(..., min_length=1, max_length=32)
+    name: str = Field(..., min_length=1, max_length=100)
+    skills: list[str] = Field(default_factory=list, max_length=16)
+    price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
 @router.post("/build/register-agent")
@@ -105,7 +122,8 @@ async def build_register_agent(req: RegisterAgentReq) -> dict:
             _sv.to_vec([sc.sym(s) for s in req.skills]),
             sc.i128(sc.usdc_to_i128(req.price_usdc)),
         ]
-        xdr = sc.build_invoke_xdr(
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
             sc.contract_ids().agent_registry,
             "register",
             args,
@@ -113,14 +131,15 @@ async def build_register_agent(req: RegisterAgentReq) -> dict:
         )
         return {"xdr": xdr}
     except Exception as e:
-        raise HTTPException(400, f"build failed: {e}") from e
+        logger.exception("register-agent build failed")
+        raise HTTPException(400, "build_failed") from e
 
 
 class AuthorizeReq(BaseModel):
-    payer: str
-    agent_id: str
-    max_amount_usdc: float
-    ttl_seconds: int = 300
+    payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
+    agent_id: str = Field(..., min_length=1, max_length=32)
+    max_amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 @router.post("/build/authorize")
@@ -134,7 +153,8 @@ async def build_authorize(req: AuthorizeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.max_amount_usdc)),
             sc.u64(expires_at),
         ]
-        xdr = sc.build_invoke_xdr(
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
             sc.contract_ids().payment_escrow,
             "authorize",
             args,
@@ -142,7 +162,8 @@ async def build_authorize(req: AuthorizeReq) -> dict:
         )
         return {"xdr": xdr, "expires_at": expires_at}
     except Exception as e:
-        raise HTTPException(400, f"build failed: {e}") from e
+        logger.exception("authorize build failed")
+        raise HTTPException(400, "build_failed") from e
 
 
 class SubmitReq(BaseModel):
@@ -153,25 +174,28 @@ class SubmitReq(BaseModel):
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
     try:
-        result = sc.submit_signed_xdr(req.signed_xdr)
+        result = await asyncio.to_thread(sc.submit_signed_xdr, req.signed_xdr)
     except Exception as e:
-        raise HTTPException(400, f"submit failed: {e}") from e
+        logger.exception("signed xdr submit failed")
+        raise HTTPException(400, "submit_failed") from e
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
 
 
 # ── writes (backend signs with STELLAR_SIGNING_KEY) ──────────────
 class ChargeReq(BaseModel):
-    auth_id_hex: str  # 32 hex chars
-    amount_usdc: float
-    job_id_hex: str   # 32 hex chars
+    auth_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
+    amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+    job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
 
 
-@router.post("/server/charge")
+@router.post("/server/charge", dependencies=[Depends(require_api_key)])
 async def server_charge(req: ChargeReq) -> dict:
     """Backend-signed PaymentEscrow.charge (the backend is the `settler` role)."""
     if not settings.stellar_signing_key:
         raise HTTPException(503, "backend signing key not configured")
+    if not (0 < req.amount_usdc <= settings.max_charge_usdc):
+        raise HTTPException(400, "amount_exceeds_charge_cap")
     try:
         aid = bytes.fromhex(req.auth_id_hex)
         jid = bytes.fromhex(req.job_id_hex)
@@ -187,25 +211,29 @@ async def server_charge(req: ChargeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.amount_usdc)),
             sc.bytes16(jid),
         ]
-        return sc.invoke_with_server_key(
+        return await asyncio.to_thread(
+            sc.invoke_with_server_key,
             sc.contract_ids().payment_escrow,
             "charge",
             args,
         )
     except Exception as e:
-        raise HTTPException(400, f"charge failed: {e}") from e
+        logger.exception("server charge failed")
+        raise HTTPException(400, "charge_failed") from e
 
 
 class SealReq(BaseModel):
-    job_id_hex: str
-    orchestrator: str  # G-address of the workflow owner
-    intent_hash_hex: str  # 64 hex chars
-    agents: list[str]
-    receipts_hex: list[str]  # each 32 hex chars
-    total_spent_usdc: float
+    job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
+    orchestrator: str = Field(
+        ..., pattern=r"^G[A-Z2-7]{55}$"
+    )  # G-address of the workflow owner
+    intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
+    agents: list[str] = Field(..., max_length=32)
+    receipts_hex: list[str] = Field(..., max_length=32)  # each 32 hex chars
+    total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 
-@router.post("/server/seal")
+@router.post("/server/seal", dependencies=[Depends(require_api_key)])
 async def server_seal(req: SealReq) -> dict:
     """Backend-signed AttestationRegistry.seal (backend is the `sealer` role)."""
     if not settings.stellar_signing_key:
@@ -235,13 +263,15 @@ async def server_seal(req: SealReq) -> dict:
             _sv.to_vec(receipts),
             sc.i128(sc.usdc_to_i128(req.total_spent_usdc)),
         ]
-        return sc.invoke_with_server_key(
+        return await asyncio.to_thread(
+            sc.invoke_with_server_key,
             sc.contract_ids().attestation_registry,
             "seal",
             args,
         )
     except Exception as e:
-        raise HTTPException(400, f"seal failed: {e}") from e
+        logger.exception("server seal failed")
+        raise HTTPException(400, "seal_failed") from e
 
 
 # ── handy: new 16-byte id ──────────────────────────────────────
