@@ -43,9 +43,11 @@ app.add_middleware(
     # re-list them in CORS_ORIGINS. Tighten this regex once the final prod
     # subdomain is known (e.g. r"^https://orizon-agents(-.*)?\.vercel\.app$").
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # The API is token/header-based — no cookies — so credentials stay off,
+    # and only the methods/headers the frontend actually sends are allowed.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["content-type", "authorization", "x-api-key"],
 )
 
 @app.exception_handler(Exception)
