@@ -3,8 +3,9 @@ PDAX webhook support — endpoint registration and inbound-event helpers.
 
 `register_webhook` subscribes a URL for "crypto" or "fiat" events. PDAX does
 not publish a signing scheme, so `verify_signature` is a defensive HMAC-SHA256
-check that runs only when `PDAX_WEBHOOK_SECRET` is configured (otherwise it
-accepts, leaving IP allow-listing as the trust boundary).
+check against `PDAX_WEBHOOK_SECRET`. With no secret configured it fails
+closed; local dev/smoke can opt out via PDAX_ALLOW_UNSIGNED_WEBHOOKS=true
+(leaving IP allow-listing as the trust boundary).
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import hashlib
 import hmac
 
 from ..config import settings
+from .config import allow_unsigned_webhooks
 from .client import PdaxClient
 from .models.webhooks import (
     CryptoEvent,
@@ -31,10 +33,11 @@ async def register_webhook(
 
 
 def verify_signature(raw_body: bytes, signature: str | None) -> bool:
-    """Constant-time HMAC-SHA256 check. Returns True when no secret is set."""
+    """Constant-time HMAC-SHA256 check. Fails closed when no secret is set
+    unless PDAX_ALLOW_UNSIGNED_WEBHOOKS explicitly opts local dev out."""
     secret = settings.pdax_webhook_secret
     if not secret:
-        return True
+        return allow_unsigned_webhooks()
     if not signature:
         return False
     expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
