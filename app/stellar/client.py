@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -195,7 +196,6 @@ def invoke_with_server_key(
         raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
 
     # Poll briefly for final status.
-    import time
     for _ in range(30):
         status = server.get_transaction(sent.hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
@@ -246,8 +246,6 @@ def build_invoke_xdr(
 
 def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     """Submit a user-signed (via Freighter) prepared transaction."""
-    import time
-
     from stellar_sdk import TransactionEnvelope
 
     server = _server()
