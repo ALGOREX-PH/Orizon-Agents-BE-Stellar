@@ -26,7 +26,7 @@ from ..pdax import base_url, constants as pc, get_pdax_client
 from ..pdax.errors import PdaxError
 from ..pdax.models.common import Side
 from ..pdax.models.funding import FiatDepositRequest
-from ..pdax.models.ramp import OffRampRequest, OnRampRequest
+from ..pdax.models.ramp import OffRampRequest, OnRampRequest, _positive_decimal_str
 from ..pdax.models.trade import (
     FirmQuoteRequest,
     FirmQuoteV2Request,
@@ -364,6 +364,10 @@ async def ramp_estimate(direction: str, amount: str, currency: str | None = None
     if direction not in {"onramp", "offramp"}:
         raise HTTPException(400, detail="direction must be onramp or offramp")
     try:
+        _positive_decimal_str(amount, "10000000")
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    try:
         est = await pr.estimate(get_pdax_client(), direction, amount, currency)  # type: ignore[arg-type]
         return est.model_dump()
     except PdaxError as e:
@@ -374,6 +378,10 @@ async def ramp_estimate(direction: str, amount: str, currency: str | None = None
 async def ramp_funding_quote(usdc: str) -> dict:
     """Pesos to pay to fund a workflow costing `usdc` USDC — buffered + rounded
     up so the amount always covers it."""
+    try:
+        _positive_decimal_str(usdc, "100000")
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e)) from e
     try:
         quote = await pr.funding_quote(get_pdax_client(), usdc)
         return quote.model_dump()
