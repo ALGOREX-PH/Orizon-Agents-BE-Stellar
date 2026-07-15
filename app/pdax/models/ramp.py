@@ -83,16 +83,18 @@ class OnRampRequest(BaseModel):
     channel; the converted USDCXLM is delivered to `stellar_address`."""
 
     php_amount: str
-    stellar_address: str = Field(..., description="Where USDCXLM is delivered")
+    stellar_address: str = Field(
+        ..., pattern=r"^G[A-Z2-7]{55}$", description="Where USDCXLM is delivered"
+    )
 
     @field_validator("php_amount")
     @classmethod
     def _check_php_amount(cls, v: str) -> str:
         return _positive_decimal_str(v, "10000000")
-    method: str = Field(..., description="Fiat deposit channel, e.g. instapay_upay_cashin")
-    identifier: str
-    sender_first_name: str
-    sender_last_name: str
+    method: str = Field(..., max_length=64, description="Fiat deposit channel, e.g. instapay_upay_cashin")
+    identifier: str = Field(..., max_length=128)
+    sender_first_name: str = Field(..., max_length=200)
+    sender_last_name: str = Field(..., max_length=200)
     sender_country_origin: str = "Philippines"
     source_of_funds: str = "Compensation"
     beneficiary_first_name: str

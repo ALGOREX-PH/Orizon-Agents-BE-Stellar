@@ -23,16 +23,16 @@ class FiatDepositRequest(BaseModel):
     required for amounts ≥ 50,000 PHP (travel rule); kept optional here and
     enforced by the service layer."""
 
-    amount: str
-    method: str = Field(..., description="See FIAT_DEPOSIT_METHODS")
-    identifier: str = Field(..., description="Unique client identifier")
+    amount: str = Field(..., max_length=32)
+    method: str = Field(..., max_length=64, description="See FIAT_DEPOSIT_METHODS")
+    identifier: str = Field(..., max_length=128, description="Unique client identifier")
     currency: str = Field("PHP", description="PHP only")
 
     # Sender
-    sender_first_name: str
+    sender_first_name: str = Field(..., max_length=200)
     sender_middle_name: str = "n.a."
-    sender_last_name: str
-    sender_country_origin: str
+    sender_last_name: str = Field(..., max_length=200)
+    sender_country_origin: str = Field(..., max_length=100)
     sender_address_line_one: str | None = None
     sender_address_line_two: str | None = None
     sender_city: str | None = None
