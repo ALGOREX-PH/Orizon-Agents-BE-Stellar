@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     port: int = 8000
 
+    # ── Hardening ─────────────────────────────────────────────
+    # Optional shared secret for the backend-signing routes. Empty (the
+    # demo default) disables the check; set it to require X-API-Key.
+    api_key: str = ""
+    # Per-client-IP sliding-window request budget (in-process, per worker).
+    rate_limit_per_minute: int = 120
+    # Ceiling for a single PaymentEscrow.charge, in USDC.
+    max_charge_usdc: float = 100.0
+
     # ── Stellar (testnet defaults) ────────────────────────────
     stellar_network: str = "testnet"
     stellar_rpc_url: str = "https://soroban-testnet.stellar.org"
