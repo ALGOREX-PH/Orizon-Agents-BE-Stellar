@@ -15,6 +15,7 @@ All amounts are i128 with Stellar's 7-decimal convention (0.012 USDC → 120000)
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,8 +58,24 @@ def network_passphrase() -> str:
     return settings.stellar_network_passphrase or Network.TESTNET_NETWORK_PASSPHRASE
 
 
+_thread_local = threading.local()
+
+
 def _server() -> SorobanServer:
-    return SorobanServer(settings.stellar_rpc_url)
+    """Return this thread's cached SorobanServer.
+
+    stellar-sdk 13.x's SorobanServer defaults to RequestsClient, which holds a
+    requests.Session — and requests does not guarantee Session thread safety
+    (response cookie-jar updates are unsynchronized). Sharing one instance
+    across worker threads is therefore unsafe, so we cache one per thread:
+    asyncio.to_thread reuses a small executor pool, so each thread still keeps
+    its TCP+TLS connections alive across calls.
+    """
+    server = getattr(_thread_local, "server", None)
+    if server is None:
+        server = SorobanServer(settings.stellar_rpc_url)
+        _thread_local.server = server
+    return server
 
 
 # ── reads ──────────────────────────────────────────────────────────────
