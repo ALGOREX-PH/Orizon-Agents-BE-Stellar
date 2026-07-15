@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..security import require_api_key
+from ..stellar import cache as rcache
 from ..stellar import client as sc
 
 import logging
@@ -24,6 +25,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stellar", tags=["stellar"])
+
+# FE polls the read routes; identical simulate calls within this window are
+# served from a tiny in-process cache instead of re-hitting Soroban RPC.
+READ_TTL_SECONDS = 3.0
 
 
 # ── meta ────────────────────────────────────────────────────────
@@ -51,12 +56,15 @@ async def network() -> dict:
 async def read_agent(agent_id: str) -> dict:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
-        result = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().agent_registry,
-            "get",
-            [sc.sym(agent_id)],
-        )
+        async def _fetch():
+            return await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().agent_registry,
+                "get",
+                [sc.sym(agent_id)],
+            )
+
+        result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
         return {"agent": result}
     except Exception as e:
         logger.exception("agent read failed for %s", agent_id)
@@ -67,14 +75,19 @@ async def read_agent(agent_id: str) -> dict:
 async def read_reputation(agent_id: str) -> dict:
     """Read ReputationLedger.avg_bps(id) + .score(id)."""
     try:
-        ids = sc.contract_ids()
-        avg, score = await asyncio.gather(
-            asyncio.to_thread(
-                sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
-            ),
-            asyncio.to_thread(
-                sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
-            ),
+        async def _fetch():
+            ids = sc.contract_ids()
+            return await asyncio.gather(
+                asyncio.to_thread(
+                    sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
+                ),
+                asyncio.to_thread(
+                    sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
+                ),
+            )
+
+        avg, score = await rcache.get_or_set(
+            f"reputation:{agent_id}", READ_TTL_SECONDS, _fetch
         )
         return {"avg_bps": avg, "score": score}
     except Exception as e:
@@ -89,11 +102,17 @@ async def read_attestation(job_id_hex: str) -> dict:
         jid = bytes.fromhex(job_id_hex)
         if len(jid) != 16:
             raise ValueError("job_id must be 32 hex chars (16 bytes)")
-        result = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().attestation_registry,
-            "get",
-            [sc.bytes16(jid)],
+
+        async def _fetch():
+            return await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().attestation_registry,
+                "get",
+                [sc.bytes16(jid)],
+            )
+
+        result = await rcache.get_or_set(
+            f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch
         )
         return {"attestation": result}
     except Exception as e:
