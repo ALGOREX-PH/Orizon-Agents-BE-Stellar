@@ -74,3 +74,25 @@ app.include_router(pdax.router, prefix="/api")
 @app.get("/")
 async def root() -> dict[str, str]:
     return {"service": "orizon-agents", "status": "online"}
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Liveness probe — process is up and serving."""
+    return {"status": "ok"}
+
+
+@app.get("/readiness")
+async def readiness() -> JSONResponse:
+    """Readiness probe — reports which required Stellar settings are missing."""
+    missing: list[str] = []
+    if not settings.stellar_signing_key:
+        missing.append("STELLAR_SIGNING_KEY")
+    if not settings.stellar_rpc_url:
+        missing.append("STELLAR_RPC_URL")
+    if missing:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "missing": missing},
+        )
+    return JSONResponse(content={"status": "ready", "missing": []})
