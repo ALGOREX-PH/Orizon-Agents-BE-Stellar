@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,7 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
+from .security import RateLimitMiddleware
 from .seed import seed_registry
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -22,6 +30,10 @@ app = FastAPI(
     description="The orchestration layer for autonomous digital labor.",
     lifespan=lifespan,
 )
+
+# Registered before CORS so CORS wraps it and 429 responses still carry
+# the Access-Control-Allow-Origin header the browser needs to read them.
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
