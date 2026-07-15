@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from agno.agent import Agent
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from ...config import settings
 from .base import Worker
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactFile(BaseModel):
@@ -52,14 +55,17 @@ def coerce_artifact(content: Any) -> CodeArtifact:
         # Try direct JSON parse
         try:
             return CodeArtifact.model_validate_json(s)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "code.gen direct JSON parse failed, trying embedded object: %s", e
+            )
         # Try to find the first balanced JSON object in the string
         m = re.search(r"\{.*\}", s, re.DOTALL)
         if m:
             try:
                 return CodeArtifact.model_validate(json.loads(m.group(0)))
             except Exception as e:
+                logger.warning("code.gen embedded JSON parse failed: %s", e)
                 raise ValueError(
                     f"code.gen returned unparseable JSON: {str(e)[:160]}"
                 ) from e
