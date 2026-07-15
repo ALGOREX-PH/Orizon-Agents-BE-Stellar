@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 
 from ..schemas import DecomposeRequest, DecomposeResponse, ExecuteRequest, ExecuteResponse
 from ..services.execution_svc import execute_plan
 from ..services.orchestrator_svc import decompose
 from ..state import state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
@@ -13,7 +17,8 @@ async def orchestrator_decompose(req: DecomposeRequest) -> DecomposeResponse:
     try:
         return await decompose(req.intent)
     except Exception as e:
-        raise HTTPException(502, f"orchestrator failed: {e}") from e
+        logger.exception("decompose failed for intent %r", req.intent)
+        raise HTTPException(502, "decompose_failed") from e
 
 
 @router.post("/execute", response_model=ExecuteResponse)
