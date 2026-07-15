@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
 import time
 from typing import Any, Optional
@@ -12,6 +13,27 @@ from ..demo_kits import detect_kit
 from ..schemas import StoredPlan, Task, TraceLine, TraceLevel
 from ..state import state
 from ..trace_bus import bus
+
+logger = logging.getLogger(__name__)
+
+# Strong references to in-flight background runs — asyncio.create_task alone
+# only keeps a weak reference, so an un-referenced task can be garbage
+# collected mid-run. Tasks remove themselves on completion.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track_background_task(task: asyncio.Task) -> None:
+    _background_tasks.add(task)
+    task.add_done_callback(_on_background_task_done)
+
+
+def _on_background_task_done(task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("background execution task failed: %s", exc, exc_info=exc)
 
 
 def _now_ts(start: float) -> str:
@@ -60,7 +82,9 @@ async def execute_plan(
     )
     state.add_task(task)
 
-    asyncio.create_task(_run(plan, task_id, auth_id_hex=auth_id_hex, payer=payer))
+    _track_background_task(
+        asyncio.create_task(_run(plan, task_id, auth_id_hex=auth_id_hex, payer=payer))
+    )
     return task_id
 
 
