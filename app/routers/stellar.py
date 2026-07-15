@@ -11,10 +11,11 @@ from __future__ import annotations
 import secrets
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import settings
+from ..security import require_api_key
 from ..stellar import client as sc
 
 import logging
@@ -177,11 +178,13 @@ class ChargeReq(BaseModel):
     job_id_hex: str   # 32 hex chars
 
 
-@router.post("/server/charge")
+@router.post("/server/charge", dependencies=[Depends(require_api_key)])
 async def server_charge(req: ChargeReq) -> dict:
     """Backend-signed PaymentEscrow.charge (the backend is the `settler` role)."""
     if not settings.stellar_signing_key:
         raise HTTPException(503, "backend signing key not configured")
+    if not (0 < req.amount_usdc <= settings.max_charge_usdc):
+        raise HTTPException(400, "amount_exceeds_charge_cap")
     try:
         aid = bytes.fromhex(req.auth_id_hex)
         jid = bytes.fromhex(req.job_id_hex)
@@ -216,7 +219,7 @@ class SealReq(BaseModel):
     total_spent_usdc: float
 
 
-@router.post("/server/seal")
+@router.post("/server/seal", dependencies=[Depends(require_api_key)])
 async def server_seal(req: SealReq) -> dict:
     """Backend-signed AttestationRegistry.seal (backend is the `sealer` role)."""
     if not settings.stellar_signing_key:
