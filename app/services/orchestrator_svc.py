@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import secrets
+from typing import Any, Optional
 
 from ..agents.orchestrator import orchestrator_agent
 from ..demo_kits import DemoKit, detect_kit
 from ..schemas import DecomposeResponse, Plan, PlanStep, StoredPlan
 from ..state import state
+from . import reputation_svc
+
+logger = logging.getLogger(__name__)
+
+# The reputation floor may never starve the planner of choices.
+_MIN_ROUTABLE_AGENTS = 3
 
 
 # ── Curated 6-step pipeline used when the intent matches a DemoKit ─────────
@@ -32,17 +40,48 @@ _KIT_ETAS: dict[str, float] = {
 }
 
 
-def _registry_prompt_fragment() -> str:
+def _rep_fields(info: Optional[reputation_svc.RepInfo]) -> dict[str, Any]:
+    """PlanStep reputation stamp — empty when the agent has no rep entry."""
+    if info is None:
+        return {}
+    return {"rep_bps": info.smoothed_bps, "rep_source": info.source}
+
+
+def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
+    agents = state.list_agents()
+    routable = [a for a in agents if reputation_svc.passes_floor(reps.get(a.id))]
+    if len(routable) < _MIN_ROUTABLE_AGENTS:
+        logger.warning(
+            "reputation floor left only %d/%d agents routable; "
+            "keeping top %d by smoothed score",
+            len(routable),
+            len(agents),
+            _MIN_ROUTABLE_AGENTS,
+        )
+        routable = sorted(
+            agents,
+            key=lambda a: (
+                reps[a.id].smoothed_bps if a.id in reps else round(a.rep * 2000)
+            ),
+            reverse=True,
+        )[:_MIN_ROUTABLE_AGENTS]
+
     lines = ["AVAILABLE_AGENTS:"]
-    for a in state.list_agents():
+    for a in routable:
+        info = reps.get(a.id)
+        # Live smoothed score on the 0–5 scale the prompt already uses;
+        # seeded rep only when the agent has no reputation entry.
+        rep_display = info.smoothed_bps / 2000 if info is not None else a.rep
         lines.append(
-            f"- id={a.id} name={a.name} price={a.price:.3f} rep={a.rep:.2f} "
+            f"- id={a.id} name={a.name} price={a.price:.3f} rep={rep_display:.2f} "
             f"skills={','.join(a.skills)}"
         )
     return "\n".join(lines)
 
 
-async def _build_kit_plan(intent: str, kit: DemoKit) -> DecomposeResponse:
+async def _build_kit_plan(
+    intent: str, kit: DemoKit, reps: dict[str, reputation_svc.RepInfo]
+) -> DecomposeResponse:
     """Deterministic 6-step plan for a curated demo intent. No LLM call.
 
     A short randomized sleep up front mimics orchestrator "thinking time" so
@@ -67,6 +106,7 @@ async def _build_kit_plan(intent: str, kit: DemoKit) -> DecomposeResponse:
                 rationale=rationale,
                 est_price_usdc=agent.price,
                 est_eta_seconds=_KIT_ETAS.get(agent_id, 1.0),
+                **_rep_fields(reps.get(agent.id)),
             )
         )
 
@@ -93,16 +133,21 @@ async def _build_kit_plan(intent: str, kit: DemoKit) -> DecomposeResponse:
 
 
 async def decompose(intent: str) -> DecomposeResponse:
+    # One live reputation snapshot per decompose — timeout-bounded and never
+    # raises (prior fallback), shared by the kit path, the routing prompt,
+    # and the per-step reputation stamps.
+    reps = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
+
     # ── Demo-kit short circuit ─────────────────────────────────────────────
     # If the intent matches a curated kit (tetris / calculator / snake /
     # pomodoro), bypass the LLM orchestrator entirely and return the
     # deterministic 6-step pipeline. Reliable for live demos; no LLM cost.
     kit = detect_kit(intent)
     if kit is not None:
-        return await _build_kit_plan(intent, kit)
+        return await _build_kit_plan(intent, kit, reps)
 
     # ── Free-form path: LLM orchestrator decides the plan ──────────────────
-    prompt = f"""{_registry_prompt_fragment()}
+    prompt = f"""{_registry_prompt_fragment(reps)}
 
 USER_INTENT: {intent}
 
@@ -124,6 +169,7 @@ Return the Plan."""
                 rationale=step.rationale.strip(),
                 est_price_usdc=agent.price,
                 est_eta_seconds=max(0.3, min(step.est_eta_seconds, 3.0)),
+                **_rep_fields(reps.get(agent.id)),
             )
         )
 
@@ -137,6 +183,7 @@ Return the Plan."""
                 rationale="fallback: generate copy for the intent",
                 est_price_usdc=copy_agent.price,
                 est_eta_seconds=0.8,
+                **_rep_fields(reps.get(copy_agent.id)),
             )
         ]
 
