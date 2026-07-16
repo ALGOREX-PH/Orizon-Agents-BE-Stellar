@@ -99,6 +99,14 @@ def test_fetch_reps_returns_entry_per_agent():
     assert all(i.source == "prior" for i in infos.values())
 
 
+def test_info_from_state_zero_evidence_is_prior():
+    info = rep._info_from_state(
+        "agt_new", {"sum_w": 0, "weight": 0, "count": 0, "disputed": 0}
+    )
+    assert info.source == "prior"
+    assert info.smoothed_bps == settings.reputation_prior_bps
+
+
 def test_info_from_state_math():
     weight = 10 * USDC
     info = rep._info_from_state(
