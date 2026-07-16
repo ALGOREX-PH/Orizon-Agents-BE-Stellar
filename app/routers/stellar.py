@@ -59,6 +59,13 @@ class ReputationInfo(BaseModel):
     source: Literal["onchain", "prior"]
 
 
+class ReputationBatch(BaseModel):
+    """Reputation for every registered agent + the routing constants."""
+
+    reputations: dict[str, ReputationInfo]
+    floor_bps: int
+    prior_bps: int
+
 
 class AttestationRead(BaseModel):
     attestation: Any
@@ -120,6 +127,20 @@ async def read_agent(agent_id: str) -> AgentRead:
     except Exception as e:
         logger.exception("agent read failed for %s", agent_id)
         raise HTTPException(404, "agent_read_failed") from e
+
+
+@router.get("/reputation", response_model=ReputationBatch)
+async def read_reputations() -> ReputationBatch:
+    """Smoothed reputation for every registered agent, plus the routing
+    floor and prior. Never fails: agents without on-chain evidence (or with
+    the chain unreachable) come back as the prior, marked source="prior".
+    """
+    infos = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
+    return {
+        "reputations": {aid: info.model_dump() for aid, info in infos.items()},
+        "floor_bps": settings.reputation_floor_bps,
+        "prior_bps": settings.reputation_prior_bps,
+    }
 
 
 @router.get("/reputation/{agent_id}", response_model=ReputationInfo)
