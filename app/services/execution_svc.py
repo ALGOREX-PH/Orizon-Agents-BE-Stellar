@@ -217,6 +217,10 @@ async def _run(
             charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
+            if charge_tx and job_id:
+                await _submit_ratings(
+                    task_id, start, plan, context, payer=payer, job_id=job_id
+                )
         else:
             sim_hash = "0x" + secrets.token_hex(16)
             await _emit(task_id, start, "proof", f"ERC-8004 attestation: {sim_hash} (simulated)")
@@ -365,3 +369,60 @@ async def _settle_onchain(
         await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
 
     return (charge_tx, proof_tx, settled_job_id)
+
+
+async def _submit_ratings(
+    task_id: str,
+    start: float,
+    plan: StoredPlan,
+    context: dict[str, Any],
+    *,
+    payer: str,
+    job_id: bytes,
+) -> None:
+    """Submit the settler's synthetic per-step ratings to ReputationLedger.
+
+    Best-effort by design: a failed rating never fails the workflow — each
+    step logs its own trace line and the loop moves on.
+    """
+    if not (
+        settings.reputation_enabled
+        and settings.stellar_reputation_ledger
+        and settings.stellar_signing_key
+    ):
+        return
+
+    from ..stellar import client as sc
+    from . import reputation_svc
+
+    # Sequential on purpose: parallel submits from the one scorer account
+    # collide on sequence numbers (each tx consumes the account's next seq).
+    for step in plan.plan.steps:
+        # Context keys are worker names (e.g. "code.gen"), same as agent_name.
+        rating, weight = reputation_svc.synthetic_rating(
+            context.get(step.agent_name or ""), step.est_price_usdc
+        )
+        try:
+            result = await asyncio.to_thread(
+                sc.submit_rating,
+                step.agent_id,
+                job_id,
+                rating,
+                weight,
+                payer,
+                "auto",
+            )
+            tx = result.get("hash") or ""
+            await _emit(
+                task_id,
+                start,
+                "proof",
+                f"reputation → {step.agent_name} rated {rating}/100 · tx {tx[:10]}…",
+            )
+        except Exception as e:
+            await _emit(
+                task_id,
+                start,
+                "error",
+                f"reputation submit failed for {step.agent_name}: {e}",
+            )
