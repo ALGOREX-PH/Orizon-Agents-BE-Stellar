@@ -42,6 +42,13 @@ STROOPS_PER_USDC = 10_000_000
 # still drags the bound down fast.
 WILSON_Z = 1.0
 
+# Mirrors of the deployed ReputationLedger v2 on-chain constants
+# (contract/reputation-ledger/src/lib.rs) — decay happens on-chain; these are
+# surfaced read-only so the API can describe the full scoring pipeline.
+EPOCH_SECONDS = 604_800          # one decay epoch = 1 week
+DECAY_BPS_PER_EPOCH = 9_250      # evidence retains 92.5% per epoch (~9-week half-life)
+MAX_DECAY_EPOCHS = 96            # beyond this, stale evidence is fully forgotten
+
 RepSource = Literal["onchain", "prior"]
 
 
