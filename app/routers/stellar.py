@@ -67,6 +67,24 @@ class ReputationBatch(BaseModel):
     prior_bps: int
 
 
+class ReputationParams(BaseModel):
+    """Full parameter set of the reputation system — routing constants applied
+    by the backend plus the deployed ledger's on-chain decay constants."""
+
+    enabled: bool
+    prior_bps: int                  # Bayesian prior mean, bps of the 0-100 scale
+    prior_weight_usdc: float        # evidence mass of the prior, USDC
+    floor_bps: int                  # routing floor on the Wilson lower bound
+    max_rating_weight_usdc: float   # per-rating weight cap
+    read_ttl_seconds: float         # cache TTL for on-chain rep_state reads
+    wilson_z: float                 # z of the one-sided lower confidence bound
+    epoch_seconds: int              # on-chain decay epoch length
+    decay_bps_per_epoch: int        # evidence retained per epoch, bps
+    max_decay_epochs: int           # full-forget horizon
+    contract_id: str                # deployed ReputationLedger id ("" if unset)
+    network: str
+
+
 class AttestationRead(BaseModel):
     attestation: Any
 
@@ -140,6 +158,28 @@ async def read_reputations() -> ReputationBatch:
         "reputations": {aid: info.model_dump() for aid, info in infos.items()},
         "floor_bps": settings.reputation_floor_bps,
         "prior_bps": settings.reputation_prior_bps,
+    }
+
+
+# Declared BEFORE the dynamic /reputation/{agent_id} route — FastAPI matches
+# routes in declaration order, so this must come first or "params" would be
+# read as an agent id.
+@router.get("/reputation/params", response_model=ReputationParams)
+async def reputation_params() -> ReputationParams:
+    """The reputation system's parameter set — pure config, no RPC call."""
+    return {
+        "enabled": settings.reputation_enabled,
+        "prior_bps": settings.reputation_prior_bps,
+        "prior_weight_usdc": settings.reputation_prior_weight_usdc,
+        "floor_bps": settings.reputation_floor_bps,
+        "max_rating_weight_usdc": settings.reputation_max_rating_weight_usdc,
+        "read_ttl_seconds": settings.reputation_read_ttl_seconds,
+        "wilson_z": reputation_svc.WILSON_Z,
+        "epoch_seconds": reputation_svc.EPOCH_SECONDS,
+        "decay_bps_per_epoch": reputation_svc.DECAY_BPS_PER_EPOCH,
+        "max_decay_epochs": reputation_svc.MAX_DECAY_EPOCHS,
+        "contract_id": settings.stellar_reputation_ledger,
+        "network": settings.stellar_network,
     }
 
 
