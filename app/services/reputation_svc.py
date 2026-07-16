@@ -124,9 +124,9 @@ def synthetic_rating(
     rating = 70
     if step_output.get("artifact"):
         rating += 15
-    violations = step_output.get("critic_violations") or step_output.get(
-        "validator_violations"
-    )
+    violations = step_output.get("critic_violations")
+    if violations is None:
+        violations = step_output.get("validator_violations")
     if isinstance(violations, list):
         rating += 10 if not violations else -3 * min(len(violations), 10)
     return max(0, min(100, rating)), weight
