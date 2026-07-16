@@ -54,6 +54,7 @@ cp .env.example .env
 | GET  | `/api/stellar/network`               | testnet contract IDs the FE renders |
 | GET  | `/api/stellar/agent/{id}`            | read an agent from AgentRegistry |
 | GET  | `/api/stellar/reputation`            | smoothed reputation for every agent + routing floor |
+| GET  | `/api/stellar/reputation/params`     | full reputation parameter set — priors, floor, decay constants |
 | GET  | `/api/stellar/reputation/{id}`       | smoothed reputation for one agent |
 | GET  | `/api/stellar/attestation/{job_id}`  | on-chain attestation by hex job id |
 | POST | `/api/stellar/build/register-agent`  | unsigned XDR — owner signs via Freighter |
@@ -90,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-41 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+44 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
 
 ## Environment variables
 
