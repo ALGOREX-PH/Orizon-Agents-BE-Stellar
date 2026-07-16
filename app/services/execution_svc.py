@@ -214,7 +214,7 @@ async def _run(
         proof_tx: Optional[str] = None
 
         if onchain:
-            charge_tx, proof_tx = await _settle_onchain(
+            charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
         else:
@@ -254,10 +254,11 @@ async def _settle_onchain(
     payer: str,
     auth_id_hex: str,
     total_usdc: float,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[bytes]]:
     """Perform the real PaymentEscrow.charge + AttestationRegistry.seal calls.
 
-    Returns (charge_tx, proof_tx); either may be None if that step failed.
+    Returns (charge_tx, proof_tx, job_id); either tx may be None if that step
+    failed, and job_id is None when the charge failed or was skipped.
     """
     from stellar_sdk import scval as _sv
 
@@ -265,6 +266,7 @@ async def _settle_onchain(
 
     charge_tx: Optional[str] = None
     proof_tx: Optional[str] = None
+    settled_job_id: Optional[bytes] = None
 
     if not settings.stellar_signing_key:
         await _emit(
@@ -273,7 +275,7 @@ async def _settle_onchain(
             "error",
             "STELLAR_SIGNING_KEY not set — skipping on-chain charge/seal",
         )
-        return (None, None)
+        return (None, None, None)
 
     try:
         settler = sc._signer_keypair().public_key
@@ -296,6 +298,7 @@ async def _settle_onchain(
         )
         charge_tx = charge.get("hash")
         if charge.get("status") == "SUCCESS":
+            settled_job_id = job_id
             await _emit(
                 task_id,
                 start,
@@ -309,7 +312,7 @@ async def _settle_onchain(
                 "error",
                 f"charge status={charge.get('status')} hash={charge_tx}",
             )
-            return (charge_tx, None)
+            return (charge_tx, None, None)
 
         # 2. seal
         intent_hash = hashlib.sha256(plan.intent.encode("utf-8")).digest()
@@ -361,4 +364,4 @@ async def _settle_onchain(
     except Exception as e:
         await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
 
-    return (charge_tx, proof_tx)
+    return (charge_tx, proof_tx, settled_job_id)
