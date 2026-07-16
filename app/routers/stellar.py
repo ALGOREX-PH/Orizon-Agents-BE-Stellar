@@ -13,12 +13,14 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..security import require_api_key
+from ..services import reputation_svc
+from ..state import state
 from ..stellar import cache as rcache
 from ..stellar import client as sc
 
@@ -43,9 +45,19 @@ class AgentRead(BaseModel):
     agent: Any
 
 
-class ReputationRead(BaseModel):
-    avg_bps: Any
-    score: Any
+class ReputationInfo(BaseModel):
+    """Smoothed reputation for one agent (mirror of reputation_svc.RepInfo)."""
+
+    agent_id: str
+    smoothed_bps: int      # prior-smoothed mean, 0..10_000
+    lower_bound_bps: int   # conservative bound used for the routing floor
+    avg_bps: int           # unsmoothed decayed on-chain mean (0 = no evidence)
+    count: int             # lifetime rating count
+    weight: int            # decayed evidence mass, stroops
+    disputed: int          # lifetime dispute count
+    dispute_rate_bps: int  # disputed / count, in bps
+    source: Literal["onchain", "prior"]
+
 
 
 class AttestationRead(BaseModel):
@@ -110,28 +122,13 @@ async def read_agent(agent_id: str) -> AgentRead:
         raise HTTPException(404, "agent_read_failed") from e
 
 
-@router.get("/reputation/{agent_id}", response_model=ReputationRead)
-async def read_reputation(agent_id: str) -> ReputationRead:
-    """Read ReputationLedger.avg_bps(id) + .score(id)."""
-    try:
-        async def _fetch():
-            ids = sc.contract_ids()
-            return await asyncio.gather(
-                asyncio.to_thread(
-                    sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
-                ),
-                asyncio.to_thread(
-                    sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
-                ),
-            )
-
-        avg, score = await rcache.get_or_set(
-            f"reputation:{agent_id}", READ_TTL_SECONDS, _fetch
-        )
-        return {"avg_bps": avg, "score": score}
-    except Exception as e:
-        logger.exception("reputation read failed for %s", agent_id)
-        raise HTTPException(502, "reputation_read_failed") from e
+@router.get("/reputation/{agent_id}", response_model=ReputationInfo)
+async def read_reputation(agent_id: str) -> ReputationInfo:
+    """Smoothed reputation for one agent — cached ReputationLedger.rep_state
+    read with Bayesian prior smoothing; prior fallback on any failure.
+    """
+    info = await reputation_svc.fetch_rep(agent_id)
+    return info.model_dump()
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
