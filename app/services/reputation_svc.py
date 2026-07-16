@@ -152,6 +152,10 @@ def _info_from_state(agent_id: str, state: dict[str, Any]) -> RepInfo:
     weight = int(state.get("weight", 0))
     count = int(state.get("count", 0))
     disputed = int(state.get("disputed", 0))
+    if count == 0 and weight == 0:
+        # A readable ledger with no evidence IS the prior — report it as such
+        # so clients can distinguish "rated on-chain" from "not yet rated".
+        return _prior_info(agent_id)
     smoothed = smoothed_bps(sum_w, weight)
     return RepInfo(
         agent_id=agent_id,
