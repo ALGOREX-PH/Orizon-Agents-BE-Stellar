@@ -13,12 +13,14 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..security import require_api_key
+from ..services import reputation_svc
+from ..state import state
 from ..stellar import cache as rcache
 from ..stellar import client as sc
 
@@ -43,9 +45,44 @@ class AgentRead(BaseModel):
     agent: Any
 
 
-class ReputationRead(BaseModel):
-    avg_bps: Any
-    score: Any
+class ReputationInfo(BaseModel):
+    """Smoothed reputation for one agent (mirror of reputation_svc.RepInfo)."""
+
+    agent_id: str
+    smoothed_bps: int      # prior-smoothed mean, 0..10_000
+    lower_bound_bps: int   # conservative bound used for the routing floor
+    avg_bps: int           # unsmoothed decayed on-chain mean (0 = no evidence)
+    count: int             # lifetime rating count
+    weight: int            # decayed evidence mass, stroops
+    disputed: int          # lifetime dispute count
+    dispute_rate_bps: int  # disputed / count, in bps
+    source: Literal["onchain", "prior"]
+
+
+class ReputationBatch(BaseModel):
+    """Reputation for every registered agent + the routing constants."""
+
+    reputations: dict[str, ReputationInfo]
+    floor_bps: int
+    prior_bps: int
+
+
+class ReputationParams(BaseModel):
+    """Full parameter set of the reputation system — routing constants applied
+    by the backend plus the deployed ledger's on-chain decay constants."""
+
+    enabled: bool
+    prior_bps: int                  # Bayesian prior mean, bps of the 0-100 scale
+    prior_weight_usdc: float        # evidence mass of the prior, USDC
+    floor_bps: int                  # routing floor on the Wilson lower bound
+    max_rating_weight_usdc: float   # per-rating weight cap
+    read_ttl_seconds: float         # cache TTL for on-chain rep_state reads
+    wilson_z: float                 # z of the one-sided lower confidence bound
+    epoch_seconds: int              # on-chain decay epoch length
+    decay_bps_per_epoch: int        # evidence retained per epoch, bps
+    max_decay_epochs: int           # full-forget horizon
+    contract_id: str                # deployed ReputationLedger id ("" if unset)
+    network: str
 
 
 class AttestationRead(BaseModel):
@@ -110,28 +147,49 @@ async def read_agent(agent_id: str) -> AgentRead:
         raise HTTPException(404, "agent_read_failed") from e
 
 
-@router.get("/reputation/{agent_id}", response_model=ReputationRead)
-async def read_reputation(agent_id: str) -> ReputationRead:
-    """Read ReputationLedger.avg_bps(id) + .score(id)."""
-    try:
-        async def _fetch():
-            ids = sc.contract_ids()
-            return await asyncio.gather(
-                asyncio.to_thread(
-                    sc.simulate_read, ids.reputation_ledger, "avg_bps", [sc.sym(agent_id)]
-                ),
-                asyncio.to_thread(
-                    sc.simulate_read, ids.reputation_ledger, "score", [sc.sym(agent_id)]
-                ),
-            )
+@router.get("/reputation", response_model=ReputationBatch)
+async def read_reputations() -> ReputationBatch:
+    """Smoothed reputation for every registered agent, plus the routing
+    floor and prior. Never fails: agents without on-chain evidence (or with
+    the chain unreachable) come back as the prior, marked source="prior".
+    """
+    infos = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
+    return {
+        "reputations": {aid: info.model_dump() for aid, info in infos.items()},
+        "floor_bps": settings.reputation_floor_bps,
+        "prior_bps": settings.reputation_prior_bps,
+    }
 
-        avg, score = await rcache.get_or_set(
-            f"reputation:{agent_id}", READ_TTL_SECONDS, _fetch
-        )
-        return {"avg_bps": avg, "score": score}
-    except Exception as e:
-        logger.exception("reputation read failed for %s", agent_id)
-        raise HTTPException(502, "reputation_read_failed") from e
+
+# Declared BEFORE the dynamic /reputation/{agent_id} route — FastAPI matches
+# routes in declaration order, so this must come first or "params" would be
+# read as an agent id.
+@router.get("/reputation/params", response_model=ReputationParams)
+async def reputation_params() -> ReputationParams:
+    """The reputation system's parameter set — pure config, no RPC call."""
+    return {
+        "enabled": settings.reputation_enabled,
+        "prior_bps": settings.reputation_prior_bps,
+        "prior_weight_usdc": settings.reputation_prior_weight_usdc,
+        "floor_bps": settings.reputation_floor_bps,
+        "max_rating_weight_usdc": settings.reputation_max_rating_weight_usdc,
+        "read_ttl_seconds": settings.reputation_read_ttl_seconds,
+        "wilson_z": reputation_svc.WILSON_Z,
+        "epoch_seconds": reputation_svc.EPOCH_SECONDS,
+        "decay_bps_per_epoch": reputation_svc.DECAY_BPS_PER_EPOCH,
+        "max_decay_epochs": reputation_svc.MAX_DECAY_EPOCHS,
+        "contract_id": settings.stellar_reputation_ledger,
+        "network": settings.stellar_network,
+    }
+
+
+@router.get("/reputation/{agent_id}", response_model=ReputationInfo)
+async def read_reputation(agent_id: str) -> ReputationInfo:
+    """Smoothed reputation for one agent — cached ReputationLedger.rep_state
+    read with Bayesian prior smoothing; prior fallback on any failure.
+    """
+    info = await reputation_svc.fetch_rep(agent_id)
+    return info.model_dump()
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)

@@ -21,9 +21,13 @@ def hermetic_settings():
         "stellar_signing_key": settings.stellar_signing_key,
         "api_key": settings.api_key,
         "max_charge_usdc": settings.max_charge_usdc,
+        "stellar_reputation_ledger": settings.stellar_reputation_ledger,
     }
     settings.stellar_signing_key = ""
     settings.api_key = ""
+    # A live ledger id in .env would make reputation reads hit testnet RPC —
+    # tests must stay offline, so force the prior-fallback path.
+    settings.stellar_reputation_ledger = ""
     yield settings
     for k, v in saved.items():
         setattr(settings, k, v)

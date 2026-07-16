@@ -28,6 +28,25 @@ class Settings(BaseSettings):
     # Ceiling for a single PaymentEscrow.charge, in USDC.
     max_charge_usdc: float = 100.0
 
+    # ── Reputation (Bayesian smoothing + routing floor) ───────
+    # The on-chain ReputationLedger stores decayed, value-weighted rating
+    # evidence; the backend smooths it with a Bayesian prior so new agents
+    # start at a meaningful score instead of zero (cold-start), and gates
+    # routing on a conservative lower bound (see services/reputation_svc.py).
+    reputation_enabled: bool = True
+    # Prior mean, in bps of the 0–100 rating scale (7000 = a 3.5/5 score).
+    reputation_prior_bps: int = 7000
+    # Evidence mass of the prior, in USDC — how much settled work it takes
+    # for on-chain evidence to dominate the prior. Sized so a prior-only
+    # agent clears the default floor on the lower bound (see tests).
+    reputation_prior_weight_usdc: float = 12.0
+    # Routing floor applied to the smoothed lower bound at decompose time.
+    reputation_floor_bps: int = 5500
+    # TTL for cached on-chain rep_state reads (per agent).
+    reputation_read_ttl_seconds: float = 15.0
+    # Per-rating weight cap in USDC — one whale job can't own the score.
+    reputation_max_rating_weight_usdc: float = 100.0
+
     # ── Stellar (testnet defaults) ────────────────────────────
     stellar_network: str = "testnet"
     stellar_rpc_url: str = "https://soroban-testnet.stellar.org"

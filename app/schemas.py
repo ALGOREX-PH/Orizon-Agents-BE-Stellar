@@ -57,6 +57,8 @@ class PlanStep(BaseModel):
     rationale: str = Field(..., description="<= 20 words")
     est_price_usdc: float = Field(..., ge=0)
     est_eta_seconds: float = Field(..., ge=0)
+    rep_bps: Optional[int] = None          # smoothed reputation at plan time (0..10_000)
+    rep_source: Optional[Literal["onchain", "prior"]] = None
 
 
 class Plan(BaseModel):

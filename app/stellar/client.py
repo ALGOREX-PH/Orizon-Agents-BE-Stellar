@@ -212,6 +212,30 @@ def invoke_with_server_key(
     return {"hash": sent.hash, "status": "timeout"}
 
 
+def submit_rating(
+    agent_id: str,
+    job_id: bytes,
+    rating_0_to_100: int,
+    weight_stroops: int,
+    payer: str,
+    kind: str = "auto",
+) -> dict[str, Any]:
+    """ReputationLedger.submit signed by the backend scorer key."""
+    return invoke_with_server_key(
+        contract_ids().reputation_ledger,
+        "submit",
+        [
+            addr(signer_public_key()),
+            sym(agent_id),
+            bytes16(job_id),
+            u32(rating_0_to_100),
+            i128(weight_stroops),
+            addr(payer),
+            sym(kind),
+        ],
+    )
+
+
 # ── writes (user-signed via Freighter) ──────────────────────────────────
 def build_invoke_xdr(
     contract_id: str,

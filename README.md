@@ -53,7 +53,9 @@ cp .env.example .env
 | POST | `/api/payments/x402`                 | simulated HTTP 402 flow |
 | GET  | `/api/stellar/network`               | testnet contract IDs the FE renders |
 | GET  | `/api/stellar/agent/{id}`            | read an agent from AgentRegistry |
-| GET  | `/api/stellar/reputation/{id}`       | ReputationLedger avg + score |
+| GET  | `/api/stellar/reputation`            | smoothed reputation for every agent + routing floor |
+| GET  | `/api/stellar/reputation/params`     | full reputation parameter set — priors, floor, decay constants |
+| GET  | `/api/stellar/reputation/{id}`       | smoothed reputation for one agent |
 | GET  | `/api/stellar/attestation/{job_id}`  | on-chain attestation by hex job id |
 | POST | `/api/stellar/build/register-agent`  | unsigned XDR — owner signs via Freighter |
 | POST | `/api/stellar/build/authorize`       | unsigned XDR — x402 pre-auth |
@@ -63,6 +65,25 @@ cp .env.example .env
 | GET  | `/api/stellar/new-id`                | fresh random 16-byte id for job/auth ids |
 | *    | `/api/pdax/*`                        | PDAX PHP↔crypto surface: trade, fiat/crypto funding, ramps, webhooks, reference data |
 
+## Reputation system
+
+Raw reputation evidence lives on-chain, aggregation lives here (the ERC-8004 split). The **ReputationLedger v2** contract stores decayed, value-weighted rating evidence per agent: every rating is weighted by the settled USDC value of the step that earned it, old evidence decays each epoch, and submissions are scorer-gated with a kind of `auto` (settler), `buyer`, or `dispute`. Reputation is a record of settled economic history, not a count of clicks.
+
+The backend turns that evidence into routing decisions. A Bayesian prior (default 7000 bps = 3.5/5) smooths sparse evidence so permissionless newcomers start at a meaningful score instead of zero, and a Wilson-style lower bound on the smoothed mean feeds the routing floor: at decompose time, agents whose bound falls below `REPUTATION_FLOOR_BPS` are omitted from the planner's registry (never shrinking the candidate list below 3), and every plan step is stamped with the live smoothed score (`rep_bps` / `rep_source`). If the chain is unreachable the caller gets the prior, marked `source="prior"` — reads never fail.
+
+After each settled workflow the settler submits one synthetic rating per step (`kind="auto"`), derived from verifiable workflow signals — did the worker deliver output, ship an artifact, trip critic violations — so scores are validation-gated rather than opinion. Submissions run sequentially (one scorer account) and are best-effort: a failed rating logs a trace line and never fails the workflow.
+
+Read it via `GET /api/stellar/reputation` (all agents + floor/prior) or `GET /api/stellar/reputation/{id}` (one agent). Tunables:
+
+| name | default | purpose |
+| --- | --- | --- |
+| `REPUTATION_ENABLED` | `true` | master switch for on-chain rep reads + settler rating submission |
+| `REPUTATION_PRIOR_BPS` | `7000` | prior mean, in bps of the 0–100 rating scale (7000 = 3.5/5) |
+| `REPUTATION_PRIOR_WEIGHT_USDC` | `12` | evidence mass of the prior — settled USDC needed for evidence to dominate |
+| `REPUTATION_FLOOR_BPS` | `5500` | routing floor applied to the smoothed lower bound at decompose time |
+| `REPUTATION_READ_TTL_SECONDS` | `15` | TTL for cached on-chain `rep_state` reads, per agent |
+| `REPUTATION_MAX_RATING_WEIGHT_USDC` | `100` | per-rating weight cap — one whale job can't own the score |
+
 ## Testing
 
 ```bash
@@ -70,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-21 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+44 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
 
 ## Environment variables
 
