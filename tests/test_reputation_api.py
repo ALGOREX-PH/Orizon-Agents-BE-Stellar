@@ -59,6 +59,35 @@ def test_reputation_single_agent_shape(client):
     assert body["lower_bound_bps"] >= settings.reputation_floor_bps
 
 
+def test_reputation_params_returns_config(client):
+    r = client.get("/api/stellar/reputation/params")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["prior_bps"] == settings.reputation_prior_bps
+    assert body["floor_bps"] == settings.reputation_floor_bps
+    assert body["prior_weight_usdc"] == settings.reputation_prior_weight_usdc
+    assert body["wilson_z"] == 1.0
+    # On-chain ReputationLedger v2 decay constants, surfaced read-only.
+    assert body["epoch_seconds"] == 604_800
+    assert body["decay_bps_per_epoch"] == 9_250
+    assert body["max_decay_epochs"] == 96
+    # Hermetic tests blank the ledger id and never touch the chain.
+    assert body["contract_id"] == ""
+    assert body["network"] == settings.stellar_network
+
+
+def test_reputation_params_not_shadowed_by_agent_route(client):
+    # /reputation/params is declared before /reputation/{agent_id}; if the
+    # dynamic route captured it, "params" would come back as an agent id.
+    r = client.get("/api/stellar/reputation/params")
+    assert r.status_code == 200
+    body = r.json()
+    assert "agent_id" not in body
+    assert "smoothed_bps" not in body
+    assert "prior_weight_usdc" in body
+
+
 # ── decompose stamping ──────────────────────────────────────────
 
 
