@@ -124,7 +124,7 @@ The repo ships a `render.yaml` blueprint + a `runtime.txt` pinning Python 3.12. 
    All other env vars (model IDs, contract addresses, RPC) are preset in `render.yaml`.
 
 4. Click **Apply**. First build takes ~2–3 minutes. You'll get `https://orizon-agents-be-xxxx.onrender.com`.
-5. After the frontend is deployed on Vercel, update `CORS_ORIGINS` in the Render dashboard to your Vercel URL. Render redeploys automatically (~30 s).
+5. After the frontend is deployed, update `CORS_ORIGINS` in the Render dashboard to the production domains (`https://orizons.xyz` and `https://www.orizons.xyz`) plus your Vercel URL. Render redeploys automatically (~30 s).
 6. (Optional) Register the on-chain `orizon_batch` agent so the Authorize & Execute flow can settle:
    ```bash
    cd ~/Websites-Services-2026/orizon-agents-BE-Stellar
