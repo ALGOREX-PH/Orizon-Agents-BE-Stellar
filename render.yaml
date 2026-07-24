@@ -19,7 +19,7 @@ services:
 
       # ── HTTP ────────────────────────────────────────────────────────────
       - key: CORS_ORIGINS
-        value: https://orizon-agents-fe-stellar.vercel.app,http://localhost:3000
+        value: https://orizons.xyz,https://www.orizons.xyz,https://orizon-agents-fe-stellar.vercel.app,http://localhost:3000
 
       # ── Models ──────────────────────────────────────────────────────────
       - key: ORCHESTRATOR_MODEL
