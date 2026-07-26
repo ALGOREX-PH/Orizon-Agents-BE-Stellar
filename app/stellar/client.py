@@ -311,7 +311,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
                 "ledger": status.ledger,
                 "return_value": rv,
                 "diagnostic": diag,
-                "explorer": f"https://stellar.expert/explorer/testnet/tx/{sent.hash}",
+                "explorer": f"https://stellar.expert/explorer/{explorer_network()}/tx/{sent.hash}",
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}
