@@ -6,7 +6,8 @@ Lightweight, dependency-free hardening primitives.
   request must carry a matching `X-API-Key` header or it is rejected 401.
 - `RateLimitMiddleware` — per-client-IP sliding-window rate limiter as a
   pure ASGI middleware (no external deps). Window/limit come from settings;
-  liveness paths and CORS preflights are exempt.
+  liveness paths and CORS preflights are exempt. Rate-limited responses
+  carry `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers.
 """
 from __future__ import annotations
 
@@ -97,6 +98,8 @@ class RateLimitMiddleware:
             self._since_sweep = 0
             self._sweep(now)
 
+        limit_header = str(self.limit).encode()
+
         if len(dq) >= self.limit:
             retry_after = max(1, math.ceil(dq[0] + self.window - now))
             body = json.dumps(
@@ -110,6 +113,8 @@ class RateLimitMiddleware:
                         (b"content-type", b"application/json"),
                         (b"content-length", str(len(body)).encode()),
                         (b"retry-after", str(retry_after).encode()),
+                        (b"x-ratelimit-limit", limit_header),
+                        (b"x-ratelimit-remaining", b"0"),
                     ],
                 }
             )
@@ -117,4 +122,16 @@ class RateLimitMiddleware:
             return
 
         dq.append(now)
-        await self.app(scope, receive, send)
+        # Quota headers reflect the window as admitted — the budget left
+        # after counting this request.
+        remaining = str(max(0, self.limit - len(dq))).encode()
+
+        async def send_with_quota(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers") or []) + [
+                    (b"x-ratelimit-limit", limit_header),
+                    (b"x-ratelimit-remaining", remaining),
+                ]
+            await send(message)
+
+        await self.app(scope, receive, send_with_quota)
