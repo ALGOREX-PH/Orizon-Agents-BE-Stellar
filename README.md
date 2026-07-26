@@ -91,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-44 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+46 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
 
 ## Environment variables
 
