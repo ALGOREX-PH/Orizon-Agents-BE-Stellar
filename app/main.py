@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,12 +27,44 @@ async def lifespan(_: FastAPI):
     yield
 
 
+class SecurityHeadersMiddleware:
+    """Pure-ASGI middleware stamping baseline hardening headers on responses.
+
+    Deliberately minimal for a JSON API: no CSP (nothing is rendered) and no
+    HSTS (TLS terminates at Render's edge, which sets it).
+    """
+
+    _HEADERS = [
+        (b"x-content-type-options", b"nosniff"),
+        (b"referrer-policy", b"no-referrer"),
+        (b"x-frame-options", b"DENY"),
+    ]
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers") or []) + self._HEADERS
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 app = FastAPI(
     title="Orizon Agents API",
     version="0.1.0",
     description="The orchestration layer for autonomous digital labor.",
     lifespan=lifespan,
 )
+
+# Added first → runs innermost: hardening headers land on every app response.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Registered before CORS so CORS wraps it and 429 responses still carry
 # the Access-Control-Allow-Origin header the browser needs to read them.
