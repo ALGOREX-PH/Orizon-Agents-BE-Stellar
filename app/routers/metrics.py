@@ -7,7 +7,7 @@ from ..state import state
 
 router = APIRouter(tags=["metrics"])
 
-# Demo-baseline presentation constants: the testnet deployment seeds only a
+# Demo-baseline presentation constants: the seeded registry holds only a
 # dozen agents, so the dashboard blends real counters with these baselines to
 # read like a populated network. Real values are layered on top below.
 DEMO_BASELINE_AGENTS_ONLINE = 2481
