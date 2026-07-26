@@ -154,6 +154,8 @@ The contracts are live on Stellar **mainnet** — `render.yaml` ships these as t
 
 ## Notes
 
+- Rate-limited (non-exempt) responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`; throttled requests get `429` + `Retry-After`.
+- Every response carries hardening headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
 - Storage is in-memory. State resets on restart.
 - 4 real Agno workers (`copywrite.v3`, `seo.brief`, `research.pro`, `sol-audit`) + `code.gen`; the remaining workers are mocks.
 - Payments and ERC-8004 proofs are simulated unless `STELLAR_SIGNING_KEY` is set — then they become real testnet transactions.
