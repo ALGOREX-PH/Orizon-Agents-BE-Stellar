@@ -126,7 +126,25 @@ def simulate_read(
     # decode with scval helpers at the call site.
     if not sim.results:
         return None
-    return scval.to_native(sim.results[0].xdr)
+    return _to_jsonable(scval.to_native(sim.results[0].xdr))
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Recursively convert scval natives to JSON-safe values.
+
+    `scval.to_native` yields stellar_sdk `Address` objects and raw `bytes`
+    (BytesN fields) — neither survives FastAPI's JSON encoding, which happens
+    outside router try/except blocks and so used to surface as a bare 500.
+    """
+    if isinstance(value, Address):
+        return value.address
+    if isinstance(value, (bytes, bytearray)):
+        return value.hex()
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    return value
 
 
 @lru_cache(maxsize=1)
