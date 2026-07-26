@@ -8,9 +8,9 @@ FastAPI + Agno + OpenAI. The brain behind the Orizon Agents frontend.
 | --- | --- | --- |
 | ⚙️ **Backend** (this repo, Render) | **https://orizon-agents-be-stellar.onrender.com** | this repo |
 | 🌐 **Frontend** (Vercel) | **https://orizon-agents-fe-stellar.vercel.app** | [Frontend repo](https://github.com/ALGOREX-PH/Orizon-Agents-FE-Stellar) |
-| 🔗 **Soroban contracts** | 4 contracts deployed on Stellar **testnet** | [Contracts repo](https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar) |
+| 🔗 **Soroban contracts** | 4 contracts deployed on Stellar **mainnet** + testnet | [Contracts repo](https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar) |
 
-**Verify it's live:** `curl https://orizon-agents-be-stellar.onrender.com/api/stellar/network` — returns the four testnet contract IDs the FE renders.
+**Verify it's live:** `curl https://orizon-agents-be-stellar.onrender.com/api/stellar/network` — returns the four contract IDs the FE renders (mainnet in production via `render.yaml`; testnet is the local-dev default).
 
 **▸ Try the full flow:** [open the dApp](https://orizon-agents-fe-stellar.vercel.app/app/orchestrator) → connect [Freighter](https://freighter.app) on **Test Net** → type `code a calculator web app` → **Authorize & Execute**.
 
@@ -51,7 +51,7 @@ cp .env.example .env
 | GET  | `/api/metrics/overview`              | dashboard overview |
 | GET  | `/api/flow/default`                  | default DAG |
 | POST | `/api/payments/x402`                 | simulated HTTP 402 flow |
-| GET  | `/api/stellar/network`               | testnet contract IDs the FE renders |
+| GET  | `/api/stellar/network`               | configured-network contract IDs the FE renders |
 | GET  | `/api/stellar/agent/{id}`            | read an agent from AgentRegistry |
 | GET  | `/api/stellar/reputation`            | smoothed reputation for every agent + routing floor |
 | GET  | `/api/stellar/reputation/params`     | full reputation parameter set — priors, floor, decay constants |
