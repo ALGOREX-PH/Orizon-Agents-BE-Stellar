@@ -132,6 +132,20 @@ The repo ships a `render.yaml` blueprint + a `runtime.txt` pinning Python 3.12. 
    ```
    One-time tx; runs against whichever contract addresses are in your `.env`.
 
+### Mainnet
+
+The contracts are live on Stellar **mainnet** — `render.yaml` ships these as the production env (testnet stays the local-dev default in `.env.example`):
+
+| contract | mainnet ID |
+| --- | --- |
+| AgentRegistry | [`CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4`](https://stellar.expert/explorer/public/contract/CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4) |
+| ReputationLedger | [`CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX`](https://stellar.expert/explorer/public/contract/CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX) |
+| PaymentEscrow | [`CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF`](https://stellar.expert/explorer/public/contract/CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF) |
+| AttestationRegistry | [`CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4`](https://stellar.expert/explorer/public/contract/CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4) |
+| XLM SAC (native, SEP-41) | [`CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA`](https://stellar.expert/explorer/public/contract/CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA) |
+
+**Go live:** the Render dashboard env overrides `render.yaml` — flip the dashboard's Stellar vars to the `render.yaml` values and the service redeploys on mainnet.
+
 ### Gotchas
 
 - **Free-tier sleep**: Render's free plan sleeps after 15 min idle. First request after idle takes ~30–50 s. Upgrade to Starter ($7/mo) for always-on.
