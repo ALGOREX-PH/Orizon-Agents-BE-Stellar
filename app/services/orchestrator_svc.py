@@ -121,7 +121,7 @@ async def _build_kit_plan(
         total_usdc=total_price,
         total_eta=total_eta,
     )
-    state.plans[plan_id] = stored
+    state.add_plan(stored)
 
     return DecomposeResponse(
         plan_id=plan_id,
@@ -198,7 +198,7 @@ Return the Plan."""
         total_usdc=total_price,
         total_eta=total_eta,
     )
-    state.plans[plan_id] = stored
+    state.add_plan(stored)
 
     return DecomposeResponse(
         plan_id=plan_id,
