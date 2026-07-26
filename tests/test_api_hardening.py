@@ -6,6 +6,7 @@ from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
+from app.config import settings
 from app.security import RateLimitMiddleware
 
 VALID_G = "G" + "A" * 55
@@ -119,3 +120,17 @@ def test_rate_limiter_exempts_health():
     limited = TestClient(RateLimitMiddleware(inner, limit=1, window_seconds=60))
     for _ in range(5):
         assert limited.get("/health").status_code == 200
+
+
+def test_rate_limit_headers_on_allowed_response(client):
+    r = client.get("/api/agents")
+    assert r.status_code == 200
+    assert r.headers["x-ratelimit-limit"] == str(settings.rate_limit_per_minute)
+    assert 0 <= int(r.headers["x-ratelimit-remaining"]) < settings.rate_limit_per_minute
+
+
+def test_rate_limit_headers_absent_on_exempt_health(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert "x-ratelimit-limit" not in r.headers
+    assert "x-ratelimit-remaining" not in r.headers
