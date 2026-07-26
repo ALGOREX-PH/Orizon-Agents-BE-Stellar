@@ -134,3 +134,11 @@ def test_rate_limit_headers_absent_on_exempt_health(client):
     assert r.status_code == 200
     assert "x-ratelimit-limit" not in r.headers
     assert "x-ratelimit-remaining" not in r.headers
+
+
+def test_security_headers_on_api_response(client):
+    r = client.get("/api/agents")
+    assert r.status_code == 200
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["x-frame-options"] == "DENY"
