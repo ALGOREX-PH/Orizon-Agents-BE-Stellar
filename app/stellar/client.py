@@ -62,6 +62,11 @@ def network_passphrase() -> str:
     return settings.stellar_network_passphrase or Network.TESTNET_NETWORK_PASSPHRASE
 
 
+def explorer_network() -> str:
+    """stellar.expert network segment for the configured network."""
+    return "public" if settings.stellar_network in ("mainnet", "public") else settings.stellar_network
+
+
 _thread_local = threading.local()
 
 
@@ -306,7 +311,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
                 "ledger": status.ledger,
                 "return_value": rv,
                 "diagnostic": diag,
-                "explorer": f"https://stellar.expert/explorer/testnet/tx/{sent.hash}",
+                "explorer": f"https://stellar.expert/explorer/{explorer_network()}/tx/{sent.hash}",
             }
         time.sleep(1)
     return {"hash": sent.hash, "status": "timeout"}

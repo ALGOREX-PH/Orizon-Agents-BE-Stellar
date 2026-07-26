@@ -27,23 +27,28 @@ services:
       - key: WORKER_MODEL
         value: gpt-5.3-codex
 
-      # ── Stellar (testnet) ──────────────────────────────────────────────
+      # ── Stellar (mainnet — production) ─────────────────────────────────
+      # Mainnet is the production target; testnet values live in
+      # .env.example for local dev. NOTE: the Render dashboard env
+      # OVERRIDES this file — paste these values there to actually
+      # flip the live service. The SDF public RPC is rate-limited —
+      # move to a dedicated provider at scale.
       - key: STELLAR_NETWORK
-        value: testnet
+        value: mainnet
       - key: STELLAR_RPC_URL
-        value: https://soroban-testnet.stellar.org
+        value: https://mainnet.sorobanrpc.com
       - key: STELLAR_NETWORK_PASSPHRASE
-        value: "Test SDF Network ; September 2015"
+        value: "Public Global Stellar Network ; September 2015"
       - key: STELLAR_AGENT_REGISTRY
-        value: CAPHXWU53UZUZJGV7IAE57NNMH3YYB5MTWO6YA53KKMXSFVLOITBJ3GQ
+        value: CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4
       - key: STELLAR_REPUTATION_LEDGER
-        value: CDCSOBEVZUPQZV5GV4D6KYHZCLNGW2KXY74RUHSZ3EZUXF34DPW422ZT
+        value: CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX
       - key: STELLAR_PAYMENT_ESCROW
-        value: CBJPTMAPMGODGZCZ2IMEQSRUX3WGUXNMKDTNN2KMJ3NFGYZ5OJ5525PI
+        value: CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF
       - key: STELLAR_ATTESTATION_REGISTRY
-        value: CBYUZKOET43UXTBXZUJIBBJW5ODGD2J2AZVVXCR3QONGOCAHOXQQHEGK
+        value: CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4
       - key: STELLAR_ASSET_SAC
-        value: CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+        value: CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA
       - key: STELLAR_ADMIN_ADDRESS
         value: GA7AI5TAJEZA27I666DSJC4MUJYBEWUYNNZWPU7R2ONA7IZQVO6R5OQV
 

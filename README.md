@@ -8,9 +8,9 @@ FastAPI + Agno + OpenAI. The brain behind the Orizon Agents frontend.
 | --- | --- | --- |
 | ⚙️ **Backend** (this repo, Render) | **https://orizon-agents-be-stellar.onrender.com** | this repo |
 | 🌐 **Frontend** (Vercel) | **https://orizon-agents-fe-stellar.vercel.app** | [Frontend repo](https://github.com/ALGOREX-PH/Orizon-Agents-FE-Stellar) |
-| 🔗 **Soroban contracts** | 4 contracts deployed on Stellar **testnet** | [Contracts repo](https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar) |
+| 🔗 **Soroban contracts** | 4 contracts deployed on Stellar **mainnet** + testnet | [Contracts repo](https://github.com/ALGOREX-PH/Orizon-Agents-Smart-Contract-Stellar) |
 
-**Verify it's live:** `curl https://orizon-agents-be-stellar.onrender.com/api/stellar/network` — returns the four testnet contract IDs the FE renders.
+**Verify it's live:** `curl https://orizon-agents-be-stellar.onrender.com/api/stellar/network` — returns the four contract IDs the FE renders (mainnet in production via `render.yaml`; testnet is the local-dev default).
 
 **▸ Try the full flow:** [open the dApp](https://orizon-agents-fe-stellar.vercel.app/app/orchestrator) → connect [Freighter](https://freighter.app) on **Test Net** → type `code a calculator web app` → **Authorize & Execute**.
 
@@ -51,7 +51,7 @@ cp .env.example .env
 | GET  | `/api/metrics/overview`              | dashboard overview |
 | GET  | `/api/flow/default`                  | default DAG |
 | POST | `/api/payments/x402`                 | simulated HTTP 402 flow |
-| GET  | `/api/stellar/network`               | testnet contract IDs the FE renders |
+| GET  | `/api/stellar/network`               | configured-network contract IDs the FE renders |
 | GET  | `/api/stellar/agent/{id}`            | read an agent from AgentRegistry |
 | GET  | `/api/stellar/reputation`            | smoothed reputation for every agent + routing floor |
 | GET  | `/api/stellar/reputation/params`     | full reputation parameter set — priors, floor, decay constants |
@@ -91,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-44 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+46 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
 
 ## Environment variables
 
@@ -131,6 +131,20 @@ The repo ships a `render.yaml` blueprint + a `runtime.txt` pinning Python 3.12. 
    .venv/bin/python scripts/register_batch_agent.py
    ```
    One-time tx; runs against whichever contract addresses are in your `.env`.
+
+### Mainnet
+
+The contracts are live on Stellar **mainnet** — `render.yaml` ships these as the production env (testnet stays the local-dev default in `.env.example`):
+
+| contract | mainnet ID |
+| --- | --- |
+| AgentRegistry | [`CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4`](https://stellar.expert/explorer/public/contract/CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4) |
+| ReputationLedger | [`CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX`](https://stellar.expert/explorer/public/contract/CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX) |
+| PaymentEscrow | [`CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF`](https://stellar.expert/explorer/public/contract/CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF) |
+| AttestationRegistry | [`CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4`](https://stellar.expert/explorer/public/contract/CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4) |
+| XLM SAC (native, SEP-41) | [`CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA`](https://stellar.expert/explorer/public/contract/CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA) |
+
+**Go live:** the Render dashboard env overrides `render.yaml` — flip the dashboard's Stellar vars to the `render.yaml` values and the service redeploys on mainnet.
 
 ### Gotchas
 
