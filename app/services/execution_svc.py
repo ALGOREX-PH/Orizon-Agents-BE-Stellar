@@ -10,7 +10,7 @@ from typing import Any
 from ..agents.registry import get_worker
 from ..config import settings
 from ..demo_kits import detect_kit
-from ..schemas import StoredPlan, Task, TraceLevel, TraceLine
+from ..schemas import StoredPlan, Task, TaskStatus, TraceLevel, TraceLine
 from ..state import state
 from ..trace_bus import bus
 
@@ -98,6 +98,8 @@ async def _run(
     start = time.monotonic()
     spent = 0.0
     last_artifact: dict | None = None
+    charge_tx: str | None = None
+    proof_tx: str | None = None
     onchain = bool(auth_id_hex and payer)
 
     # Accumulate prior step outputs so later steps can build on them.
@@ -213,9 +215,6 @@ async def _run(
             if isinstance(output, dict):
                 context[worker.name] = output
 
-        charge_tx: str | None = None
-        proof_tx: str | None = None
-
         if onchain:
             charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
@@ -235,22 +234,54 @@ async def _run(
                 f"{time.monotonic() - start:.2f}s",
             )
 
-        # update task state
-        task = state.tasks.get(task_id)
-        if task:
-            state.tasks[task_id] = task.model_copy(
-                update={
-                    "status": "complete",
-                    "spent": round(spent, 4),
-                    "artifact": last_artifact,
-                    "charge_tx": charge_tx,
-                    "proof_tx": proof_tx,
-                }
-            )
+        _finalize_task(task_id, "complete", spent, last_artifact, charge_tx, proof_tx)
 
+    except asyncio.CancelledError:
+        # Shutdown or external cancel: leave the task terminal instead of
+        # "running" forever, tell the stream, and keep the cancellation
+        # propagating. shield: a second cancel must not kill the trace line.
+        _finalize_task(task_id, "failed", spent, last_artifact, charge_tx, proof_tx)
+        await asyncio.shield(_emit(task_id, start, "error", "workflow cancelled"))
+        raise
+    except Exception as e:
+        logger.exception("workflow %s failed", task_id)
+        _finalize_task(task_id, "failed", spent, last_artifact, charge_tx, proof_tx)
+        await _emit(task_id, start, "error", f"workflow failed: {e}")
     finally:
-        await asyncio.sleep(0.05)
-        await bus.close(task_id)
+        # The SSE terminator must reach subscribers even mid-cancellation:
+        # run the drain-delay + close shielded so bus.close ALWAYS executes
+        # (a bare `await asyncio.sleep` here would swallow the close when a
+        # CancelledError landed on it).
+        await asyncio.shield(_finish_stream(task_id))
+
+
+def _finalize_task(
+    task_id: str,
+    status: TaskStatus,
+    spent: float,
+    artifact: dict | None,
+    charge_tx: str | None,
+    proof_tx: str | None,
+) -> None:
+    """Terminal status write shared by the complete / failed / cancelled paths."""
+    task = state.tasks.get(task_id)
+    if task is None:
+        return
+    state.tasks[task_id] = task.model_copy(
+        update={
+            "status": status,
+            "spent": round(spent, 4),
+            "artifact": artifact,
+            "charge_tx": charge_tx,
+            "proof_tx": proof_tx,
+        }
+    )
+
+
+async def _finish_stream(task_id: str) -> None:
+    """Give SSE subscribers a beat to drain, then end the stream."""
+    await asyncio.sleep(0.05)
+    await bus.close(task_id)
 
 
 async def _settle_onchain(
