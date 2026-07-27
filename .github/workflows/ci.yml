@@ -42,5 +42,5 @@ jobs:
       - name: Typecheck
         run: mypy
 
-      - name: Test
-        run: python -m pytest -q
+      - name: Test (with coverage gate)
+        run: python -m pytest -q --cov

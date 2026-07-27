@@ -1,7 +1,7 @@
 # Local dev loop — mirrors what CI runs. `make check` before pushing.
 PY := .venv/bin/python
 
-.PHONY: lint format type test check
+.PHONY: lint format type test cov check
 
 lint:
 	.venv/bin/ruff check .
@@ -15,5 +15,8 @@ type:
 test:
 	$(PY) -m pytest -q
 
-check: lint type test
+cov:
+	$(PY) -m pytest -q --cov
+
+check: lint type cov
 	.venv/bin/ruff format --check .
