@@ -85,7 +85,7 @@ async def lifespan(_: FastAPI):
     # process exits without "task was destroyed but it is pending" noise.
     pending = {t for t in execution_svc._background_tasks if not t.done()}
     if pending:
-        _, pending = await asyncio.wait(pending, timeout=15)
+        _done, pending = await asyncio.wait(pending, timeout=15)
     for task in pending:
         task.cancel()
     if pending:
