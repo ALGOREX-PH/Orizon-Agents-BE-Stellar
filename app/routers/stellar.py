@@ -13,7 +13,7 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -234,7 +234,9 @@ class RegisterAgentReq(BaseModel):
     )
     agent_id: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[str] = Field(default_factory=list, max_length=16)
+    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=16
+    )
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
@@ -295,7 +297,9 @@ async def build_authorize(req: AuthorizeReq) -> AuthorizeXdrResponse:
 
 
 class SubmitReq(BaseModel):
-    signed_xdr: str
+    # A prepared invoke tx is a few KB of base64; 32 KiB is generous headroom
+    # while keeping the endpoint from swallowing arbitrary payloads.
+    signed_xdr: str = Field(..., min_length=1, max_length=32_768)
 
 
 @router.post("/submit")
@@ -355,8 +359,12 @@ class SealReq(BaseModel):
         ..., pattern=r"^G[A-Z2-7]{55}$"
     )  # G-address of the workflow owner
     intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
-    agents: list[str] = Field(..., max_length=32)
-    receipts_hex: list[str] = Field(..., max_length=32)  # each 32 hex chars
+    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        ..., max_length=32
+    )
+    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(
+        ..., max_length=32
+    )
     total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 
