@@ -71,8 +71,8 @@ def explorer_network() -> str:
 _thread_local = threading.local()
 
 
-def _server() -> SorobanServer:
-    """Return this thread's cached SorobanServer.
+def _server(*, submit: bool = False) -> SorobanServer:
+    """Return this thread's cached SorobanServer for the given traffic class.
 
     stellar-sdk 13.x's SorobanServer defaults to RequestsClient, which holds a
     requests.Session — and requests does not guarantee Session thread safety
@@ -81,17 +81,26 @@ def _server() -> SorobanServer:
     asyncio.to_thread reuses a small executor pool, so each thread still keeps
     its TCP+TLS connections alive across calls.
 
-    Explicit client timeouts: the SDK default (post_timeout 33s × 3 retries
-    ≈ 99s worst case) can pin asyncio.to_thread workers for minutes when RPC
-    misbehaves; cap each call at 15s with a single retry instead.
+    Two timeout profiles (the SDK default — post_timeout 33s × 3 retries
+    ≈ 99s worst case — can pin asyncio.to_thread workers for minutes):
+
+      - read (default): simulate/load_account view calls sit on the hot
+        request path, often twelve-wide behind a ~2.5s caller deadline. Cap
+        hard at 5s with no retry so a misbehaving RPC fails fast instead of
+        holding a worker thread ~60s.
+      - submit: transaction submission is rarer and worth patience — 15s cap
+        with a single retry.
     """
-    server = getattr(_thread_local, "server", None)
+    attr = "submit_server" if submit else "read_server"
+    server = getattr(_thread_local, attr, None)
     if server is None:
-        server = SorobanServer(
-            settings.stellar_rpc_url,
-            client=RequestsClient(request_timeout=8, post_timeout=15, num_retries=1),
+        client = (
+            RequestsClient(request_timeout=8, post_timeout=15, num_retries=1)
+            if submit
+            else RequestsClient(request_timeout=5, post_timeout=5, num_retries=0)
         )
-        _thread_local.server = server
+        server = SorobanServer(settings.stellar_rpc_url, client=client)
+        setattr(_thread_local, attr, server)
     return server
 
 
@@ -199,7 +208,7 @@ def invoke_with_server_key(
 ) -> dict[str, Any]:
     """Sign + submit a contract invocation with the backend's STELLAR_SIGNING_KEY."""
     kp = _signer_keypair()
-    server = _server()
+    server = _server(submit=True)
     account = server.load_account(kp.public_key)
 
     tx = (
@@ -279,7 +288,7 @@ def build_invoke_xdr(
     Freighter. After Freighter returns the signed XDR, submit it with
     `submit_signed_xdr(signed_xdr)`.
     """
-    server = _server()
+    server = _server(submit=True)
     account = server.load_account(source)
     tx = (
         TransactionBuilder(
@@ -303,7 +312,7 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
     """Submit a user-signed (via Freighter) prepared transaction."""
     from stellar_sdk import TransactionEnvelope
 
-    server = _server()
+    server = _server(submit=True)
     try:
         env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
     except Exception as e:
