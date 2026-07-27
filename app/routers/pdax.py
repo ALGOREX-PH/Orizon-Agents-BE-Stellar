@@ -47,7 +47,14 @@ from ..pdax.models.funding import (
     FiatDepositRequest,
     FiatDepositResult,
 )
-from ..pdax.models.ramp import OffRampRequest, OnRampRequest, _positive_decimal_str
+from ..pdax.models.ramp import (
+    FundingQuote,
+    OffRampRequest,
+    OnRampRequest,
+    RampEstimate,
+    RampRecord,
+    _positive_decimal_str,
+)
 from ..pdax.models.trade import (
     FirmQuoteRequest,
     FirmQuoteV2Request,
@@ -433,7 +440,7 @@ async def ramp_estimate(
     direction: Literal["onramp", "offramp"],
     amount: str,
     currency: str | None = None,
-) -> dict:
+) -> RampEstimate:
     """Indicative conversion preview. `currency` denominates `amount`; pass
     currency=USDC on an on-ramp to price a target USDC amount (workflow cost)."""
     try:
@@ -441,14 +448,13 @@ async def ramp_estimate(
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        est = await pr.estimate(get_pdax_client(), direction, amount, currency)
-        return est.model_dump()
+        return await pr.estimate(get_pdax_client(), direction, amount, currency)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/ramp/funding-quote")
-async def ramp_funding_quote(usdc: str) -> dict:
+async def ramp_funding_quote(usdc: str) -> FundingQuote:
     """Pesos to pay to fund a workflow costing `usdc` USDC — buffered + rounded
     up so the amount always covers it."""
     try:
@@ -456,32 +462,31 @@ async def ramp_funding_quote(usdc: str) -> dict:
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        quote = await pr.funding_quote(get_pdax_client(), usdc)
-        return quote.model_dump()
+        return await pr.funding_quote(get_pdax_client(), usdc)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/ramp/onramp")
-async def ramp_onramp(req: OnRampRequest) -> dict:
+async def ramp_onramp(req: OnRampRequest) -> RampRecord:
     """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
     settlement is completed by the fiat-deposit webhook."""
     try:
         record = await pr.start_onramp(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
-    return record.model_dump()
+    return record
 
 
 @secured.post("/ramp/offramp")
-async def ramp_offramp(req: OffRampRequest) -> dict:
+async def ramp_offramp(req: OffRampRequest) -> RampRecord:
     """Start a USDCXLM → PHP ramp. Returns a deposit address for the agent to
     send USDC to; settlement is completed by the crypto-deposit webhook."""
     try:
         record = await pr.start_offramp(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
-    return record.model_dump()
+    return record
 
 
 def _mask_account_numbers(value: object) -> object:
@@ -519,16 +524,16 @@ async def ramp_list(
 
 
 @secured.get("/ramp/{ramp_id}")
-async def ramp_status(ramp_id: str) -> dict:
+async def ramp_status(ramp_id: str) -> RampRecord:
     """Current state + stage history of a single ramp."""
     record = pr.ramp_store.get(ramp_id)
     if record is None:
         raise HTTPException(404, detail="ramp not found")
-    return record.model_dump()
+    return record
 
 
 @secured.post("/ramp/{ramp_id}/reconcile")
-async def ramp_reconcile(ramp_id: str) -> dict:
+async def ramp_reconcile(ramp_id: str) -> RampRecord:
     """Check PDAX for settlement and advance the ramp — used by the UI to track
     progress without relying on PDAX's redirect page."""
     try:
@@ -537,7 +542,7 @@ async def ramp_reconcile(ramp_id: str) -> dict:
         raise _fail(e) from e
     if record is None:
         raise HTTPException(404, detail="ramp not found")
-    return record.model_dump()
+    return record
 
 
 router.include_router(secured)
