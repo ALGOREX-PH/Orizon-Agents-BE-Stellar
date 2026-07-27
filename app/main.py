@@ -63,6 +63,17 @@ app = FastAPI(
     version="0.1.0",
     description="The orchestration layer for autonomous digital labor.",
     lifespan=lifespan,
+    openapi_tags=[
+        {"name": "agents", "description": "Registered agents and their skills, pricing, and reputation."},
+        {"name": "orchestrator", "description": "Decompose a goal into a plan and execute it across agents."},
+        {"name": "tasks", "description": "Task history, status, and produced artifacts."},
+        {"name": "trace", "description": "Per-task execution traces, polled or streamed."},
+        {"name": "metrics", "description": "Aggregate network metrics for the dashboard."},
+        {"name": "flow", "description": "Agent-graph flow layout consumed by the frontend visualizer."},
+        {"name": "payments", "description": "x402 payment challenges and settlement."},
+        {"name": "stellar", "description": "Soroban contract reads, unsigned-XDR builds, and signed-XDR submits."},
+        {"name": "pdax", "description": "PDAX PHP-to-crypto on/off-ramp: trade, funding, withdrawals, webhooks."},
+    ],
 )
 
 # Added first → runs innermost: hardening headers land on every app response.
