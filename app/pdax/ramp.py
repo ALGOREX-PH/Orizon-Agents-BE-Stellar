@@ -16,6 +16,7 @@ event to a waiting ramp and advances it. The relevant Stellar asset is USDCXLM.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 
 from ..config import settings
 from . import funding, money, ramp_store, trade, transactions, withdrawals
@@ -302,9 +303,12 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         return ramp_store.save(record)
     finally:
         # Payout PII (names, bank code, account number) lives only while the
-        # ramp is in flight — drop it as soon as the advance step finishes,
-        # whether it completed, failed, or raised.
-        _PAYOUTS.pop(record.ramp_id, None)
+        # ramp is in flight — drop it as soon as the advance step reaches a
+        # terminal state (completed or failed). An unexpected escape leaves it
+        # in place so a reconcile re-entry can still pay out; the store's
+        # eviction path still drops it if the ramp never resumes.
+        if record.status in ("completed", "failed"):
+            _PAYOUTS.pop(record.ramp_id, None)
 
 
 def _match(event: CryptoEvent | FiatEvent):
@@ -334,6 +338,36 @@ def _match(event: CryptoEvent | FiatEvent):
     return None, None
 
 
+async def _advance_guarded(
+    client: PdaxClient,
+    record: RampRecord,
+    advance: Callable[[PdaxClient, RampRecord], Awaitable[RampRecord]],
+) -> RampRecord:
+    """Flip a funded ramp forward through `advance` — as one recoverable unit.
+
+    Expected PDAX failures are caught inside advance_* and land the ramp in a
+    terminal "failed" state. Anything that escapes instead (a bug, a cancelled
+    request) would otherwise strand the ramp mid-flight in funded/converting/
+    settling — states neither reconcile nor a retried webhook re-enters. Roll
+    the status back to `awaiting_payment` so the ramp stays recoverable.
+
+    Must be called with the per-ramp lock held.
+    """
+    record.status = "funded"
+    try:
+        return await advance(client, record)
+    except BaseException as e:
+        record.status = "awaiting_payment"
+        ramp_store.add_stage(
+            record,
+            "advance",
+            "failed",
+            f"interrupted ({type(e).__name__}); ramp returned to awaiting_payment",
+        )
+        ramp_store.save(record)
+        raise
+
+
 async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
     """Actively check PDAX for settlement of a waiting ramp and advance it — a
     fallback for when the webhook hasn't been delivered (e.g. staging redirect
@@ -347,14 +381,12 @@ async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
         if record.direction == "onramp" and record.identifier:
             txns = await transactions.fiat_transactions(client, identifier=record.identifier, mode="CashIn")
             if any(str(t.status).upper() == "COMPLETED" for t in txns):
-                record.status = "funded"
-                return await advance_onramp(client, record)
+                return await _advance_guarded(client, record, advance_onramp)
         elif record.direction == "offramp" and record.deposit_address:
             crypto_txns = await transactions.crypto_transactions(client, type="crypto_in")
             for t in crypto_txns:
                 if t.receiver_wallet_address == record.deposit_address and str(t.status).lower() == "completed":
-                    record.status = "funded"
-                    return await advance_offramp(client, record)
+                    return await _advance_guarded(client, record, advance_offramp)
         return record
 
 
@@ -368,8 +400,7 @@ async def handle_event(client: PdaxClient, event: CryptoEvent | FiatEvent) -> Ra
     async with ramp_store.lock_for(record.ramp_id):
         if record.status != "awaiting_payment":
             return record
-        record.status = "funded"
-        return await advance(client, record)
+        return await _advance_guarded(client, record, advance)
 
 
 # Beneficiary payout details for in-flight off-ramps (kept beside the store).
