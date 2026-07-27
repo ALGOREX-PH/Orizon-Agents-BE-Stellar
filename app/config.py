@@ -117,6 +117,31 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _production_webhooks_require_signature(self) -> "Settings":
+        """Fail fast when production PDAX would accept unsigned webhooks.
+
+        The webhook route verifies signatures with pdax_webhook_secret and
+        only skips verification via the pdax_allow_unsigned_webhooks escape
+        hatch. Both an enabled escape hatch and a missing secret would let
+        anyone forge deposit/withdrawal callbacks in production, so refuse
+        to start rather than run open.
+        """
+        if self.pdax_environment.strip().lower() == "production":
+            if self.pdax_allow_unsigned_webhooks:
+                raise ValueError(
+                    "PDAX_ALLOW_UNSIGNED_WEBHOOKS must not be enabled when "
+                    "PDAX_ENVIRONMENT is production. Unset it and configure "
+                    "PDAX_WEBHOOK_SECRET instead."
+                )
+            if not self.pdax_webhook_secret:
+                raise ValueError(
+                    "PDAX_WEBHOOK_SECRET is required when PDAX_ENVIRONMENT "
+                    "is production — without it inbound webhooks cannot be "
+                    "verified. Set the shared secret from the PDAX console."
+                )
+        return self
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
