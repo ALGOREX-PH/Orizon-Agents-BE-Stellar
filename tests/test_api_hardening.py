@@ -137,6 +137,32 @@ def test_rate_limit_headers_absent_on_exempt_health(client):
     assert "x-ratelimit-remaining" not in r.headers
 
 
+def test_cors_allows_project_preview_origins(client):
+    for origin in (
+        "https://orizon-agents-fe-stellar.vercel.app",
+        "https://orizon-agents-fe-stellar-git-update-2-team.vercel.app",
+    ):
+        r = client.options(
+            "/api/agents",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_foreign_vercel_origins(client):
+    for origin in (
+        "https://evil.vercel.app",
+        "https://orizon-agents-fe-stellar.vercel.app.evil.com",
+        "http://orizon-agents-fe-stellar.vercel.app",
+    ):
+        r = client.options(
+            "/api/agents",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        assert "access-control-allow-origin" not in r.headers, origin
+
+
 def test_security_headers_on_api_response(client):
     r = client.get("/api/agents")
     assert r.status_code == 200

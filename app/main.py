@@ -154,13 +154,15 @@ app.add_middleware(SecurityHeadersMiddleware)
 # the Access-Control-Allow-Origin header the browser needs to read them.
 app.add_middleware(RateLimitMiddleware)
 
+# This project's Vercel production/preview origins only — a broad
+# `.*\.vercel\.app` would let ANY hosted Vercel page drive the
+# unauthenticated LLM routes from visitors' browsers.
+_CORS_ORIGIN_REGEX = re.compile(r"^https://orizon-agents-fe-stellar(-[a-z0-9-]+)?\.vercel\.app$")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    # Accept every Vercel preview / production domain without needing to
-    # re-list them in CORS_ORIGINS. Tighten this regex once the final prod
-    # subdomain is known (e.g. r"^https://orizon-agents(-.*)?\.vercel\.app$").
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=_CORS_ORIGIN_REGEX.pattern,
     # The API is token/header-based — no cookies — so credentials stay off,
     # and only the methods/headers the frontend actually sends are allowed.
     allow_credentials=False,
