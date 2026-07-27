@@ -413,4 +413,4 @@ async def server_seal(req: SealReq) -> dict:
 @router.get("/new-id", response_model=NewIdResponse)
 async def new_id() -> NewIdResponse:
     """Produce a random 16-byte id (hex) — useful for job_id / auth_id."""
-    return {"id_hex": secrets.token_hex(16)}
+    return NewIdResponse(id_hex=secrets.token_hex(16))
