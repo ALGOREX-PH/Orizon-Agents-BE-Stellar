@@ -109,20 +109,20 @@ READ_TTL_SECONDS = 3.0
 @router.get("/network", response_model=NetworkInfo)
 async def network() -> NetworkInfo:
     ids = sc.contract_ids()
-    return {
-        "network": settings.stellar_network,
-        "rpc_url": settings.stellar_rpc_url,
-        "network_passphrase": sc.network_passphrase(),
-        "admin": settings.stellar_admin_address,
-        "asset": "native",
-        "asset_sac": ids.asset_sac,
-        "contracts": {
+    return NetworkInfo(
+        network=settings.stellar_network,
+        rpc_url=settings.stellar_rpc_url,
+        network_passphrase=sc.network_passphrase(),
+        admin=settings.stellar_admin_address,
+        asset="native",
+        asset_sac=ids.asset_sac,
+        contracts={
             "agent_registry": ids.agent_registry,
             "reputation_ledger": ids.reputation_ledger,
             "payment_escrow": ids.payment_escrow,
             "attestation_registry": ids.attestation_registry,
         },
-    }
+    )
 
 
 # Agent ids are contract Symbols: short alphanumeric/underscore tokens. Reject
