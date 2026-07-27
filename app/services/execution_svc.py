@@ -323,8 +323,7 @@ async def _settle_onchain(
         total_i128 = sc.usdc_to_i128(max(total_usdc, 0.000001))
 
         # 1. charge
-        charge = await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        charge = await sc.invoke_with_server_key_async(
             sc.contract_ids().payment_escrow,
             "charge",
             [
@@ -363,8 +362,7 @@ async def _settle_onchain(
             receipts.append(sc.bytes16(bytes(receipt_rv)))
         receipts_vec = _sv.to_vec(receipts)
 
-        seal = await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        seal = await sc.invoke_with_server_key_async(
             sc.contract_ids().attestation_registry,
             "seal",
             [

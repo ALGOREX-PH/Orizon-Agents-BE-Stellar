@@ -306,7 +306,7 @@ class SubmitReq(BaseModel):
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
     try:
-        result = await asyncio.to_thread(sc.submit_signed_xdr, req.signed_xdr)
+        result = await sc.submit_signed_xdr_async(req.signed_xdr)
     except Exception as e:
         logger.exception("signed xdr submit failed")
         raise HTTPException(400, "submit_failed") from e
@@ -342,8 +342,7 @@ async def server_charge(req: ChargeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.amount_usdc)),
             sc.bytes16(jid),
         ]
-        return await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        return await sc.invoke_with_server_key_async(
             sc.contract_ids().payment_escrow,
             "charge",
             args,
@@ -398,8 +397,7 @@ async def server_seal(req: SealReq) -> dict:
             _sv.to_vec(receipts),
             sc.i128(sc.usdc_to_i128(req.total_spent_usdc)),
         ]
-        return await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        return await sc.invoke_with_server_key_async(
             sc.contract_ids().attestation_registry,
             "seal",
             args,

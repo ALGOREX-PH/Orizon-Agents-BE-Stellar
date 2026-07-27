@@ -14,6 +14,7 @@ All amounts are i128 with Stellar's 7-decimal convention (0.012 USDC → 120000)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -201,12 +202,18 @@ def signer_public_key() -> str:
 
 
 # ── writes (backend-signed) ─────────────────────────────────────────────
-def invoke_with_server_key(
+# Submit/poll budget: same ~30s total as the old 30 × 1s loop, but the async
+# poll waits with mild exponential backoff (1s → 2s → 4s capped).
+_POLL_BUDGET_SECONDS = 30.0
+_POLL_MAX_DELAY_SECONDS = 4.0
+
+
+def _send_server_signed(
     contract_id: str,
     function_name: str,
     args: list[Any],
-) -> dict[str, Any]:
-    """Sign + submit a contract invocation with the backend's STELLAR_SIGNING_KEY."""
+) -> str:
+    """Build, prepare, sign (backend key) and send; returns the pending tx hash."""
     kp = _signer_keypair()
     server = _server(submit=True)
     account = server.load_account(kp.public_key)
@@ -234,22 +241,76 @@ def invoke_with_server_key(
     sent = server.send_transaction(tx)
     if sent.status != SendTransactionStatus.PENDING:
         raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
+    return sent.hash
 
-    # Poll briefly for final status.
-    for _ in range(30):
-        status = server.get_transaction(sent.hash)
+
+def _get_transaction(tx_hash: str) -> Any:
+    return _server(submit=True).get_transaction(tx_hash)
+
+
+def _finalize_invoke(status: Any, tx_hash: str) -> dict[str, Any]:
+    rv = _extract_return_value(status.result_meta_xdr)
+    if isinstance(rv, (bytes, bytearray)):
+        rv = rv.hex()
+    return {
+        "hash": tx_hash,
+        "status": status.status.value,
+        "ledger": status.ledger,
+        "result": rv,
+    }
+
+
+def _poll_final_sync(tx_hash: str, finalize: Any) -> dict[str, Any]:
+    """Blocking poll for final tx status (sync callers only — pins a thread)."""
+    for _ in range(int(_POLL_BUDGET_SECONDS)):
+        status = _get_transaction(tx_hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
-            rv = _extract_return_value(status.result_meta_xdr)
-            if isinstance(rv, (bytes, bytearray)):
-                rv = rv.hex()
-            return {
-                "hash": sent.hash,
-                "status": status.status.value,
-                "ledger": status.ledger,
-                "result": rv,
-            }
+            return finalize(status, tx_hash)
         time.sleep(1)
-    return {"hash": sent.hash, "status": "timeout"}
+    return {"hash": tx_hash, "status": "timeout"}
+
+
+async def _poll_final(tx_hash: str, finalize: Any) -> dict[str, Any]:
+    """Poll for final tx status with the WAIT on the event loop.
+
+    Each get_transaction RPC runs in a worker thread, but the sleeps between
+    polls are `await asyncio.sleep` — no thread is pinned across the ~30s
+    budget.
+    """
+    deadline = time.monotonic() + _POLL_BUDGET_SECONDS
+    delay = 1.0
+    while True:
+        status = await asyncio.to_thread(_get_transaction, tx_hash)
+        if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
+            return finalize(status, tx_hash)
+        if time.monotonic() + delay > deadline:
+            return {"hash": tx_hash, "status": "timeout"}
+        await asyncio.sleep(delay)
+        delay = min(delay * 2.0, _POLL_MAX_DELAY_SECONDS)
+
+
+def invoke_with_server_key(
+    contract_id: str,
+    function_name: str,
+    args: list[Any],
+) -> dict[str, Any]:
+    """Sign + submit a contract invocation with the backend's STELLAR_SIGNING_KEY.
+
+    Sync variant — polls with time.sleep. On the event loop prefer
+    `invoke_with_server_key_async`, which waits between polls on the loop.
+    """
+    tx_hash = _send_server_signed(contract_id, function_name, args)
+    return _poll_final_sync(tx_hash, _finalize_invoke)
+
+
+async def invoke_with_server_key_async(
+    contract_id: str,
+    function_name: str,
+    args: list[Any],
+) -> dict[str, Any]:
+    """Async invoke_with_server_key: submit in a worker thread, wait on the loop."""
+    tx_hash = await asyncio.to_thread(_send_server_signed, contract_id, function_name, args)
+    return await _poll_final(tx_hash, _finalize_invoke)
 
 
 def submit_rating(
@@ -308,8 +369,8 @@ def build_invoke_xdr(
     return prepared.to_xdr()
 
 
-def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
-    """Submit a user-signed (via Freighter) prepared transaction."""
+def _send_signed_xdr(signed_xdr: str) -> str:
+    """Decode + broadcast a user-signed envelope; returns the pending tx hash."""
     from stellar_sdk import TransactionEnvelope
 
     server = _server(submit=True)
@@ -330,26 +391,40 @@ def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
         )
         logger.error("[stellar.submit] send failed: %s", detail)
         raise RuntimeError(f"submit failed ({detail})")
+    return sent.hash
 
-    for _ in range(30):
-        status = server.get_transaction(sent.hash)
-        if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
-            rv = _extract_return_value(status.result_meta_xdr)
-            if isinstance(rv, (bytes, bytearray)):
-                rv = rv.hex()
-            diag = _extract_diagnostics(status)
-            if status.status == GetTransactionStatus.FAILED:
-                logger.error("[stellar.submit] tx %s FAILED · %s", sent.hash, diag)
-            return {
-                "hash": sent.hash,
-                "status": status.status.value,
-                "ledger": status.ledger,
-                "return_value": rv,
-                "diagnostic": diag,
-                "explorer": f"https://stellar.expert/explorer/{explorer_network()}/tx/{sent.hash}",
-            }
-        time.sleep(1)
-    return {"hash": sent.hash, "status": "timeout"}
+
+def _finalize_submit(status: Any, tx_hash: str) -> dict[str, Any]:
+    rv = _extract_return_value(status.result_meta_xdr)
+    if isinstance(rv, (bytes, bytearray)):
+        rv = rv.hex()
+    diag = _extract_diagnostics(status)
+    if status.status == GetTransactionStatus.FAILED:
+        logger.error("[stellar.submit] tx %s FAILED · %s", tx_hash, diag)
+    return {
+        "hash": tx_hash,
+        "status": status.status.value,
+        "ledger": status.ledger,
+        "return_value": rv,
+        "diagnostic": diag,
+        "explorer": f"https://stellar.expert/explorer/{explorer_network()}/tx/{tx_hash}",
+    }
+
+
+def submit_signed_xdr(signed_xdr: str) -> dict[str, Any]:
+    """Submit a user-signed (via Freighter) prepared transaction.
+
+    Sync variant — polls with time.sleep. On the event loop prefer
+    `submit_signed_xdr_async`, which waits between polls on the loop.
+    """
+    tx_hash = _send_signed_xdr(signed_xdr)
+    return _poll_final_sync(tx_hash, _finalize_submit)
+
+
+async def submit_signed_xdr_async(signed_xdr: str) -> dict[str, Any]:
+    """Async submit_signed_xdr: broadcast in a worker thread, wait on the loop."""
+    tx_hash = await asyncio.to_thread(_send_signed_xdr, signed_xdr)
+    return await _poll_final(tx_hash, _finalize_submit)
 
 
 def _extract_diagnostics(status: Any) -> str:
