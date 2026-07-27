@@ -24,10 +24,68 @@ def test_health_probe(client):
     assert r.json()["status"] == "ok"
 
 
-def test_readiness_reports_missing_signing_key(client):
+_CONTRACT_ID_FIELDS = (
+    "stellar_agent_registry",
+    "stellar_payment_escrow",
+    "stellar_attestation_registry",
+    "stellar_asset_sac",
+    "stellar_reputation_ledger",
+)
+
+
+def _configure_stellar(monkeypatch) -> None:
+    for field in _CONTRACT_ID_FIELDS:
+        monkeypatch.setattr(settings, field, "C" + "A" * 55)
+
+
+def test_readiness_ready_without_signing_key(client, monkeypatch):
+    """Read-only deployments are legitimate: an absent signer is reported
+    but never fails readiness (config.py doctrine)."""
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "pdax_username", "")
+    monkeypatch.setattr(settings, "pdax_password", "")
     r = client.get("/readiness")
-    assert r.status_code in (200, 503)
-    assert "status" in r.json() or "detail" in r.json()
+    assert r.status_code == 200
+    assert r.json() == {
+        "status": "ready",
+        "llm": "ok",
+        "stellar": "configured",
+        "signer": "absent",
+        "pdax": "unconfigured",
+    }
+
+
+def test_readiness_503_when_llm_key_missing(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["llm"] == "missing_key"
+
+
+def test_readiness_503_when_stellar_incomplete(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_agent_registry", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["stellar"] == "incomplete"
+
+
+def test_readiness_reports_configured_signer_and_pdax(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_signing_key", "S" + "A" * 55)
+    monkeypatch.setattr(settings, "pdax_username", "ops@example.com")
+    monkeypatch.setattr(settings, "pdax_password", "pw")
+    body = client.get("/readiness").json()
+    assert body["signer"] == "configured"
+    assert body["pdax"] == "configured"
 
 
 def test_charge_rejects_negative_amount(client):

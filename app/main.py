@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.utils import is_body_allowed_for_status_code
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
@@ -130,6 +131,7 @@ app = FastAPI(
     description="The orchestration layer for autonomous digital labor.",
     lifespan=lifespan,
     openapi_tags=[
+        {"name": "meta", "description": "Service identity and health/readiness probes."},
         {"name": "agents", "description": "Registered agents and their skills, pricing, and reputation."},
         {"name": "orchestrator", "description": "Decompose a goal into a plan and execute it across agents."},
         {"name": "tasks", "description": "Task history, status, and produced artifacts."},
@@ -278,12 +280,12 @@ app.include_router(stellar.router, prefix="/api")
 app.include_router(pdax.router, prefix="/api")
 
 
-@app.get("/")
+@app.get("/", tags=["meta"], summary="Service identity ping")
 async def root() -> dict[str, str]:
     return {"service": "orizon-agents", "status": "online"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"], summary="Liveness probe")
 async def health() -> dict[str, Any]:
     """Liveness probe — process is up and serving."""
     return {
@@ -293,17 +295,48 @@ async def health() -> dict[str, Any]:
     }
 
 
-@app.get("/readiness")
-async def readiness() -> JSONResponse:
-    """Readiness probe — reports which required Stellar settings are missing."""
-    missing: list[str] = []
-    if not settings.stellar_signing_key:
-        missing.append("STELLAR_SIGNING_KEY")
-    if not settings.stellar_rpc_url:
-        missing.append("STELLAR_RPC_URL")
-    if missing:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "missing": missing},
-        )
-    return JSONResponse(content={"status": "ready", "missing": []})
+class ReadinessResponse(BaseModel):
+    """Per-dependency readiness report. Purely config-derived — no live
+    network calls, so the probe stays cheap and deterministic."""
+
+    status: str  # "ready" | "not_ready"
+    llm: str  # "ok" | "missing_key"
+    stellar: str  # "configured" | "incomplete"
+    signer: str  # "configured" | "absent" — informational, never gates readiness
+    pdax: str  # "configured" | "unconfigured" — informational
+
+
+@app.get(
+    "/readiness",
+    tags=["meta"],
+    summary="Readiness probe with per-dependency status",
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse, "description": "A required dependency is not configured."}},
+)
+async def readiness(response: Response) -> ReadinessResponse:
+    """503 only when a dependency the API cannot serve without is missing:
+    the LLM key or the Stellar contract/RPC config. The signing key is
+    deliberately informational — read-only deployments are legitimate."""
+    llm = "ok" if settings.openai_api_key else "missing_key"
+
+    contract_ids = (
+        settings.stellar_agent_registry,
+        settings.stellar_payment_escrow,
+        settings.stellar_attestation_registry,
+        settings.stellar_asset_sac,
+    )
+    stellar_ok = bool(settings.stellar_rpc_url) and all(contract_ids)
+    # The reputation ledger only matters while reputation-gated routing is on.
+    if settings.reputation_enabled and not settings.stellar_reputation_ledger:
+        stellar_ok = False
+
+    ready = llm == "ok" and stellar_ok
+    if not ready:
+        response.status_code = 503
+    return ReadinessResponse(
+        status="ready" if ready else "not_ready",
+        llm=llm,
+        stellar="configured" if stellar_ok else "incomplete",
+        signer="configured" if settings.stellar_signing_key else "absent",
+        pdax="configured" if settings.pdax_username and settings.pdax_password else "unconfigured",
+    )
