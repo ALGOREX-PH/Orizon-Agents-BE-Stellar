@@ -53,8 +53,8 @@ def test_fiat_withdraw_passes_guard_with_api_key(client, hermetic_settings, monk
 
 def test_pdax_health_needs_no_api_key(client, hermetic_settings, monkeypatch):
     hermetic_settings.api_key = "secret-key"
-    # Blank the PDAX credentials so the probe reports unconfigured instead of
-    # dialing the live sandbox.
+    # Blank the PDAX credentials — the public probe reads settings only and
+    # must report configured=False without dialing anything.
     from app.config import settings
 
     monkeypatch.setattr(settings, "pdax_username", "")
@@ -62,7 +62,9 @@ def test_pdax_health_needs_no_api_key(client, hermetic_settings, monkeypatch):
 
     r = client.get("/api/pdax/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "unconfigured"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["configured"] is False
 
 
 def test_x402_rejects_crlf_agent_id(client):

@@ -79,8 +79,22 @@ async def environment() -> dict:
 
 @router.get("/health")
 async def health() -> dict:
-    """Liveness + dependency check. Probes the PDAX auth handshake and reports
-    ok / degraded / unconfigured — never exposing credentials."""
+    """Non-actuating liveness report, read straight from settings. This route
+    is public, so it must never dial PDAX — anonymous callers could otherwise
+    drive repeated real logins (and lock the institutional account). The
+    authenticated /health/deep route performs the actual handshake probe."""
+    return {
+        "status": "ok",
+        "environment": settings.pdax_environment,
+        "configured": bool(settings.pdax_username and settings.pdax_password),
+    }
+
+
+@secured.get("/health/deep")
+async def health_deep() -> dict:
+    """Actuating dependency check (API-key guarded): probes the PDAX auth
+    handshake and reports ok / degraded / unconfigured — never exposing
+    credentials."""
     if not (settings.pdax_username and settings.pdax_password):
         return {"status": "unconfigured", "environment": settings.pdax_environment}
     try:
