@@ -16,6 +16,8 @@ services:
         sync: false
       - key: STELLAR_SIGNING_KEY
         sync: false
+      - key: API_KEY
+        sync: false
 
       # ── HTTP ────────────────────────────────────────────────────────────
       - key: CORS_ORIGINS
