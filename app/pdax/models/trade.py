@@ -84,3 +84,9 @@ class Order(BaseModel):
     total_amount: float
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class OrdersResponse(BaseModel):
+    """Envelope for the order-history list route."""
+
+    orders: list[Order]

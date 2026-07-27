@@ -48,7 +48,10 @@ from ..pdax.models.trade import (
     FirmQuoteV2Request,
     IndicativePriceParams,
     IndicativePriceV2Params,
+    Order,
     OrderRequest,
+    OrdersResponse,
+    Quote,
 )
 from ..pdax.models.webhooks import WebhookRegisterRequest
 from ..pdax.models.withdrawals import CryptoOutRequest, FiatWithdrawRequest
@@ -131,7 +134,7 @@ async def trade_price(
     side: Side,
     base_quantity: str,
     base_currency: str = "PHP",
-) -> dict:
+) -> Quote:
     """Indicative (non-binding) price for a pair."""
     try:
         params = IndicativePriceParams(
@@ -140,8 +143,7 @@ async def trade_price(
             side=side,
             base_quantity=base_quantity,
         )
-        quote = await pt.indicative_price(get_pdax_client(), params)
-        return quote.model_dump()
+        return await pt.indicative_price(get_pdax_client(), params)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -153,7 +155,7 @@ async def trade_price_v2(
     currency: str,
     quantity: str,
     base_currency: str = "PHP",
-) -> dict:
+) -> Quote:
     """Indicative price (v2 — receive-side currency + quantity)."""
     try:
         params = IndicativePriceV2Params(
@@ -163,47 +165,42 @@ async def trade_price_v2(
             currency=currency,
             quantity=quantity,
         )
-        quote = await pt.indicative_price_v2(get_pdax_client(), params)
-        return quote.model_dump()
+        return await pt.indicative_price_v2(get_pdax_client(), params)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/quote")
-async def trade_quote(req: FirmQuoteRequest) -> dict:
+async def trade_quote(req: FirmQuoteRequest) -> Quote:
     """Firm quote (expires in ~15s) acceptable via /trade/order."""
     try:
-        quote = await pt.firm_quote(get_pdax_client(), req)
-        return quote.model_dump()
+        return await pt.firm_quote(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/quote/v2")
-async def trade_quote_v2(req: FirmQuoteV2Request) -> dict:
+async def trade_quote_v2(req: FirmQuoteV2Request) -> Quote:
     """Firm quote (v2)."""
     try:
-        quote = await pt.firm_quote_v2(get_pdax_client(), req)
-        return quote.model_dump()
+        return await pt.firm_quote_v2(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/order")
-async def trade_order(req: OrderRequest) -> dict:
+async def trade_order(req: OrderRequest) -> Order:
     """Accept a firm quote and execute the trade."""
     try:
-        order = await pt.place_order(get_pdax_client(), req)
-        return order.model_dump()
+        return await pt.place_order(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.get("/trade/orders/{order_id}")
-async def trade_order_details(order_id: int) -> dict:
+async def trade_order_details(order_id: int) -> Order:
     try:
-        order = await pt.get_order(get_pdax_client(), order_id)
-        return order.model_dump()
+        return await pt.get_order(get_pdax_client(), order_id)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -214,7 +211,7 @@ async def trade_orders(
     page_size: int = Query(10, alias="pageSize"),
     start_date: str | None = Query(None, alias="startDate"),
     end_date: str | None = Query(None, alias="endDate"),
-) -> dict:
+) -> OrdersResponse:
     try:
         orders = await pt.list_orders(
             get_pdax_client(),
@@ -223,7 +220,7 @@ async def trade_orders(
             start_date=start_date,
             end_date=end_date,
         )
-        return {"orders": [o.model_dump() for o in orders]}
+        return OrdersResponse(orders=orders)
     except PdaxError as e:
         raise _fail(e) from e
 
