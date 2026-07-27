@@ -182,7 +182,16 @@ class RateLimitMiddleware:
         if len(dq) >= self.limit:
             retry_after = max(1, math.ceil(dq[0] + self.window - now))
             body = json.dumps(
-                {"error": {"code": "rate_limited", "message": "too many requests"}}
+                {
+                    # Same envelope the app's exception handlers emit: legacy
+                    # "detail" plus the structured "error" object.
+                    "detail": "rate_limited",
+                    "error": {
+                        "code": "rate_limited",
+                        "message": "too many requests",
+                        "request_id": request_id_var.get(),
+                    },
+                }
             ).encode()
             await send(
                 {

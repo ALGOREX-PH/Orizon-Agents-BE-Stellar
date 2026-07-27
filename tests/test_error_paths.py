@@ -33,7 +33,12 @@ def test_forced_500_returns_envelope_with_nosniff():
         r = c.get("/boom-test")
     assert r.status_code == 500
     assert r.json() == {
-        "error": {"code": "internal_error", "message": "internal server error"}
+        "detail": "internal server error",
+        "error": {
+            "code": "internal_error",
+            "message": "internal server error",
+            "request_id": r.headers["x-request-id"],
+        },
     }
     # The global handler runs outside the security-header middleware, so it
     # must stamp the hardening headers itself.

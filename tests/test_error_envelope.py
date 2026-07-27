@@ -2,6 +2,13 @@
 key and adds an "error" object with code / message / request_id."""
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
+
+from app.security import RateLimitMiddleware
+
 CHARGE_BODY = {
     "auth_id_hex": "ab" * 16,
     "amount_usdc": 1.0,
@@ -54,3 +61,21 @@ def test_validation_error_keeps_detail_list_and_adds_error(client):
     assert all("loc" in e and "msg" in e for e in body["detail"])
     assert body["error"]["code"] == "validation_error"
     assert body["error"]["request_id"] == "env-val-1"
+
+
+def test_rate_limited_body_carries_both_keys():
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[Route("/hit", ok)])
+    limited = TestClient(RateLimitMiddleware(inner, limit=1, window_seconds=60))
+
+    assert limited.get("/hit").status_code == 200
+    blocked = limited.get("/hit")
+    assert blocked.status_code == 429
+    body = blocked.json()
+    assert body["detail"] == "rate_limited"
+    assert body["error"]["code"] == "rate_limited"
+    assert body["error"]["message"] == "too many requests"
+    assert "request_id" in body["error"]
+    assert "retry-after" in blocked.headers

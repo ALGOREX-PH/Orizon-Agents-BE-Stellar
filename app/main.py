@@ -198,13 +198,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         "referrer-policy": "no-referrer",
         "x-frame-options": "DENY",
     }
+    # RequestContextMiddleware's send wrapper never sees this response (the
+    # exception unwound past it), so echo the id header here as well.
+    request_id = request_id_var.get()
+    if request_id != "-":
+        headers["x-request-id"] = request_id
     origin = request.headers.get("origin")
     if origin and origin in settings.cors_origin_list:
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
     return JSONResponse(
         status_code=500,
-        content={"error": {"code": "internal_error", "message": "internal server error"}},
+        content=_error_envelope("internal server error", "internal_error", "internal server error"),
         headers=headers,
     )
 
