@@ -91,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-173 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed. `ruff check`, `ruff format --check`, and `mypy` (config in `pyproject.toml`) guard style and types; CI runs all four on every push and PR.
+224 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed. `ruff check`, `ruff format --check`, `mypy` (strict-defs), and a 75% coverage floor guard the suite; CI runs all of them on every push and PR, and `make check` runs the same gate locally.
 
 ## Environment variables
 
