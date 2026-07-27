@@ -7,6 +7,7 @@ import secrets
 from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
+from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
 from ..schemas import DecomposeResponse, Plan, PlanStep, StoredPlan
 from ..state import state
@@ -152,7 +153,13 @@ async def decompose(intent: str) -> DecomposeResponse:
 USER_INTENT: {intent}
 
 Return the Plan."""
-    result = await orchestrator_agent.arun(prompt)
+    # Hard end-to-end budget for the planning call — without it a hung
+    # upstream would pin this request for the OpenAI client's full
+    # timeout x retry envelope. The router maps TimeoutError to a 504.
+    result = await asyncio.wait_for(
+        orchestrator_agent.arun(prompt),
+        timeout=settings.decompose_timeout_seconds,
+    )
     plan: Plan = result.content  # type: ignore[assignment]
 
     # Clamp to known agents; backfill names + snap price to registry truth.
