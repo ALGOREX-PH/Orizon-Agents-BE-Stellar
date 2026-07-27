@@ -175,20 +175,20 @@ async def read_reputations() -> ReputationBatch:
 @router.get("/reputation/params", response_model=ReputationParams)
 async def reputation_params() -> ReputationParams:
     """The reputation system's parameter set — pure config, no RPC call."""
-    return {
-        "enabled": settings.reputation_enabled,
-        "prior_bps": settings.reputation_prior_bps,
-        "prior_weight_usdc": settings.reputation_prior_weight_usdc,
-        "floor_bps": settings.reputation_floor_bps,
-        "max_rating_weight_usdc": settings.reputation_max_rating_weight_usdc,
-        "read_ttl_seconds": settings.reputation_read_ttl_seconds,
-        "wilson_z": reputation_svc.WILSON_Z,
-        "epoch_seconds": reputation_svc.EPOCH_SECONDS,
-        "decay_bps_per_epoch": reputation_svc.DECAY_BPS_PER_EPOCH,
-        "max_decay_epochs": reputation_svc.MAX_DECAY_EPOCHS,
-        "contract_id": settings.stellar_reputation_ledger,
-        "network": settings.stellar_network,
-    }
+    return ReputationParams(
+        enabled=settings.reputation_enabled,
+        prior_bps=settings.reputation_prior_bps,
+        prior_weight_usdc=settings.reputation_prior_weight_usdc,
+        floor_bps=settings.reputation_floor_bps,
+        max_rating_weight_usdc=settings.reputation_max_rating_weight_usdc,
+        read_ttl_seconds=settings.reputation_read_ttl_seconds,
+        wilson_z=reputation_svc.WILSON_Z,
+        epoch_seconds=reputation_svc.EPOCH_SECONDS,
+        decay_bps_per_epoch=reputation_svc.DECAY_BPS_PER_EPOCH,
+        max_decay_epochs=reputation_svc.MAX_DECAY_EPOCHS,
+        contract_id=settings.stellar_reputation_ledger,
+        network=settings.stellar_network,
+    )
 
 
 @router.get("/reputation/{agent_id}", response_model=ReputationInfo)
