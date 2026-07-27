@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal, Optional, Any
-from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional
 
+from pydantic import BaseModel, Field
 
 # ───── Registry ────────────────────────────────────────────
 AgentStatus = Literal["online", "idle", "offline"]

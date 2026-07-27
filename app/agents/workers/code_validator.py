@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 
-
 _EXTERNAL_SCRIPT = re.compile(
     r'<script\b[^>]*\ssrc=["\'](?!data:|javascript:|#|/|\./|\.\./)([^"\']+)',
     re.IGNORECASE,

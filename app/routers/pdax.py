@@ -15,17 +15,29 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..config import settings
-from ..security import require_api_key
 from ..pdax import (
     balances as pb,
+)
+from ..pdax import base_url, get_pdax_client
+from ..pdax import constants as pc
+from ..pdax import (
     funding as pf,
+)
+from ..pdax import (
     ramp as pr,
+)
+from ..pdax import (
     trade as pt,
+)
+from ..pdax import (
     transactions as ptx,
+)
+from ..pdax import (
     webhooks as pw,
+)
+from ..pdax import (
     withdrawals as pwd,
 )
-from ..pdax import base_url, constants as pc, get_pdax_client
 from ..pdax.errors import PdaxError
 from ..pdax.models.common import Side
 from ..pdax.models.funding import FiatDepositRequest
@@ -39,6 +51,7 @@ from ..pdax.models.trade import (
 )
 from ..pdax.models.webhooks import WebhookRegisterRequest
 from ..pdax.models.withdrawals import CryptoOutRequest, FiatWithdrawRequest
+from ..security import require_api_key
 
 router = APIRouter(prefix="/pdax", tags=["pdax"])
 

@@ -10,7 +10,7 @@ from typing import Any, Optional
 from ..agents.registry import get_worker
 from ..config import settings
 from ..demo_kits import detect_kit
-from ..schemas import StoredPlan, Task, TraceLine, TraceLevel
+from ..schemas import StoredPlan, Task, TraceLevel, TraceLine
 from ..state import state
 from ..trace_bus import bus
 

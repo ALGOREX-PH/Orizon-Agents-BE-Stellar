@@ -9,12 +9,12 @@ Write routes have two shapes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import time
-
-from fastapi import APIRouter, Depends, HTTPException, Path
 from typing import Annotated, Any, Literal
 
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 
 from ..config import settings
@@ -23,8 +23,6 @@ from ..services import reputation_svc
 from ..state import state
 from ..stellar import cache as rcache
 from ..stellar import client as sc
-
-import logging
 
 logger = logging.getLogger(__name__)
 
