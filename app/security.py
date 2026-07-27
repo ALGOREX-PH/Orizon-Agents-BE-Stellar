@@ -13,6 +13,7 @@ Lightweight, dependency-free hardening primitives.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import math
@@ -30,6 +31,12 @@ logger = logging.getLogger(__name__)
 
 # Paths that must never be throttled (probes + root ping).
 EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
+
+# Current request's id — set by RequestContextMiddleware, readable from any
+# code running in the request's task context (error handlers, log records).
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default="-"
+)
 
 
 async def require_api_key(
@@ -72,6 +79,15 @@ class RequestContextMiddleware:
         )
         if not request_id:
             request_id = uuid.uuid4().hex[:16]
+
+        # Deliberately never reset: the 500 handler runs on the outermost
+        # ServerErrorMiddleware layer AFTER this frame has unwound, so a
+        # finally-reset would erase the id before that handler reads it.
+        # Each request runs in its own task context, so nothing leaks across
+        # requests.
+        request_id_var.set(request_id)
+        # Also visible to route handlers as request.state.request_id.
+        scope.setdefault("state", {})["request_id"] = request_id
 
         method = scope.get("method", "-")
         path = scope.get("path", "-")
