@@ -97,7 +97,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 
 | name | default | purpose |
 | --- | --- | --- |
-| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` require a matching `X-API-Key` header |
+| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` and all non-public `/api/pdax/*` routes require a matching `X-API-Key` header |
 | `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
 | `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
 
