@@ -19,7 +19,7 @@ Concurrency model — single-flight with shield:
     for the next request instead of being re-spawned from scratch.
   - Producer failures are negatively cached for a short window so a
     hard-down RPC doesn't fan out a fresh upstream call per request: within
-    the window the cached exception is re-raised without spawning work.
+    the window an equivalent exception is raised without spawning work.
 """
 
 from __future__ import annotations
@@ -35,13 +35,19 @@ _store: dict[str, tuple[float, Any]] = {}
 # In-flight producers: key → the Task computing that key's value.
 _flights: dict[str, asyncio.Task[Any]] = {}
 
-# Negative cache: key → (expiry, exception); hits within the window re-raise.
-_failures: dict[str, tuple[float, BaseException]] = {}
+# Negative cache: key → (expiry, exception class, message). Hits within the
+# window raise a FRESH instance — retaining live exception objects would pin
+# their tracebacks (and captured frames) in memory, and re-raising the same
+# object appends traceback frames on every hit.
+_failures: dict[str, tuple[float, type[BaseException], str]] = {}
 _NEGATIVE_TTL_SECONDS = 2.5
 
 # Sweep threshold: entries are only overwritten, never evicted, so a stream of
-# unique keys would grow the dicts forever. Past this size, misses sweep
-# expired entries out. (Flights self-clean via their done callbacks.)
+# unique keys would grow the dicts forever. Past this combined size, misses
+# sweep expired entries out. The gate counts _failures too: an attacker
+# streaming unique failing keys (or a hard-down RPC) populates only the
+# negative cache, and _store alone would never trip the sweep. (Flights
+# self-clean via their done callbacks.)
 _MAX_ENTRIES = 512
 
 
@@ -61,12 +67,13 @@ async def get_or_set(
         return hit[1]
     neg = _failures.get(key)
     if neg is not None:
-        if neg[0] > now:
-            raise neg[1]
+        expiry, exc_type, message = neg
+        if expiry > now:
+            raise _rebuild(exc_type, message)
         del _failures[key]
     task = _flights.get(key)
     if task is None or task.done():
-        if len(_store) > _MAX_ENTRIES:
+        if len(_store) + len(_failures) > _MAX_ENTRIES:
             _sweep(now)
         task = asyncio.create_task(_produce(key, ttl_seconds, producer))
         _flights[key] = task
@@ -80,10 +87,23 @@ async def _produce(key: str, ttl_seconds: float, producer: Callable[[], Awaitabl
     try:
         value = await producer()
     except Exception as e:
-        _failures[key] = (time.monotonic() + _NEGATIVE_TTL_SECONDS, e)
+        _failures[key] = (time.monotonic() + _NEGATIVE_TTL_SECONDS, type(e), str(e))
         raise
     _store[key] = (time.monotonic() + ttl_seconds, value)
     return value
+
+
+def _rebuild(exc_type: type[BaseException], message: str) -> BaseException:
+    """Fresh exception instance for a negative-cache hit.
+
+    Preserves the original class when it's constructible from its message
+    (the common case); classes with other constructor signatures fall back to
+    a RuntimeError naming the original type.
+    """
+    try:
+        return exc_type(message)
+    except Exception:
+        return RuntimeError(f"{exc_type.__name__}: {message}")
 
 
 def _on_flight_done(key: str, task: asyncio.Task[Any]) -> None:
@@ -98,7 +118,7 @@ def _on_flight_done(key: str, task: asyncio.Task[Any]) -> None:
 def _sweep(now: float) -> None:
     for k in [k for k, (exp, _) in _store.items() if exp <= now]:
         del _store[k]
-    for k in [k for k, (exp, _) in _failures.items() if exp <= now]:
+    for k in [k for k, entry in _failures.items() if entry[0] <= now]:
         del _failures[k]
 
 

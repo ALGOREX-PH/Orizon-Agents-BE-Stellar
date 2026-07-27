@@ -122,6 +122,80 @@ def test_negative_cache_expires(monkeypatch):
     assert calls["n"] == 2
 
 
+def test_unique_failure_flood_stays_bounded(monkeypatch):
+    """A stream of unique failing keys (attacker-reachable via unknown-id
+    reads) must not grow the negative cache without bound — the sweep gate
+    counts _failures even when _store stays empty (RPC hard down)."""
+    monkeypatch.setattr(cache, "_NEGATIVE_TTL_SECONDS", 0.0)
+
+    async def failing():
+        raise RuntimeError("rpc down")
+
+    async def run():
+        for i in range(cache._MAX_ENTRIES + 64):
+            with pytest.raises(RuntimeError):
+                await cache.get_or_set(f"bad{i}", 60.0, failing)
+
+    asyncio.run(run())
+    assert len(cache._store) == 0
+    assert len(cache._failures) <= cache._MAX_ENTRIES + 1
+
+
+def test_negative_cache_reraises_fresh_instance():
+    original = RuntimeError("rpc down")
+
+    async def failing():
+        raise original
+
+    async def run():
+        with pytest.raises(RuntimeError) as first:
+            await cache.get_or_set("k", 60.0, failing)
+        assert first.value is original  # the flight delivers the real exception
+        with pytest.raises(RuntimeError) as second:
+            await cache.get_or_set("k", 60.0, failing)
+        # The negative-cache hit raises a FRESH object — re-raising the same
+        # instance would append traceback frames on every hit and pin the
+        # original traceback in memory.
+        assert second.value is not original
+        assert str(second.value) == "rpc down"
+
+    asyncio.run(run())
+
+
+def test_negative_cache_preserves_exception_class():
+    async def failing():
+        raise ValueError("bad param")
+
+    async def run():
+        with pytest.raises(ValueError, match="bad param"):
+            await cache.get_or_set("k", 60.0, failing)
+        with pytest.raises(ValueError, match="bad param"):
+            await cache.get_or_set("k", 60.0, failing)
+
+    asyncio.run(run())
+
+
+def test_negative_cache_falls_back_for_odd_constructors():
+    """Exception classes not constructible from a message re-raise as a
+    RuntimeError naming the original type instead of blowing up the cache."""
+
+    class TwoArg(Exception):
+        def __init__(self, a: int, b: int) -> None:
+            super().__init__(a, b)
+
+    async def failing():
+        raise TwoArg(1, 2)
+
+    async def run():
+        with pytest.raises(TwoArg):
+            await cache.get_or_set("k", 60.0, failing)
+        with pytest.raises(RuntimeError) as info:
+            await cache.get_or_set("k", 60.0, failing)
+        assert "TwoArg" in str(info.value)
+
+    asyncio.run(run())
+
+
 def test_cancelled_caller_still_caches():
     producer, calls = _counting_producer(delay=0.05)
 

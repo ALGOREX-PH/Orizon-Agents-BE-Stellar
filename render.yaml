@@ -12,7 +12,7 @@ services:
     # Render terminates all ingress, so trusting X-Forwarded-* from any peer is
     # safe here; keep-alive sits above the edge idle timeout for SSE, and the
     # in-app request log supersedes uvicorn's access log.
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 65 --no-access-log
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 65 --no-access-log --limit-concurrency 200
     healthCheckPath: /health
     autoDeploy: true
     envVars:

@@ -23,11 +23,12 @@ from .models.webhooks import (
     WebhookRegisterRequest,
     WebhookRegistration,
 )
+from .trade import _unwrap
 
 
 async def register_webhook(client: PdaxClient, req: WebhookRegisterRequest) -> WebhookRegistration:
     data = await client.request("POST", "pdax-institution/v1/config/webhook", json=req.model_dump())
-    return WebhookRegistration(**data["data"])
+    return _unwrap(data, WebhookRegistration)
 
 
 def verify_signature(raw_body: bytes, signature: str | None) -> bool:
@@ -75,3 +76,13 @@ def claim_event(key: str) -> bool:
     while len(_seen_events) > _SEEN_EVENTS_MAX:
         _seen_events.popitem(last=False)
     return True
+
+
+def release_event(key: str) -> None:
+    """Forget a claimed key so PDAX's retry is processed instead of deduped.
+
+    A claim must not outlive a failed side effect: if parsing or handling
+    raises after `claim_event`, the event never took effect, and swallowing
+    the retry as a duplicate would drop it forever.
+    """
+    _seen_events.pop(key, None)

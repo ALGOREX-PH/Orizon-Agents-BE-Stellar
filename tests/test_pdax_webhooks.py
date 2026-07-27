@@ -9,9 +9,11 @@ import json
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import settings
 from app.pdax import webhooks as pw
+from app.pdax.errors import PdaxError
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +143,60 @@ def test_bad_json_with_valid_signature_is_400(client, monkeypatch):
         },
     )
     assert r.status_code == 400
+
+
+def test_failed_handling_releases_claim_so_retry_succeeds(client, monkeypatch):
+    """A delivery whose side effect failed must not poison the retry: the
+    claim is released, so PDAX's redelivery is processed instead of being
+    answered with {"duplicate": true} and dropped forever."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    calls = {"n": 0}
+
+    async def flaky_handle(client_, event):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PdaxError("upstream exploded", http_status=500)
+        return None
+
+    monkeypatch.setattr("app.pdax.ramp.handle_event", flaky_handle)
+    payload = _crypto_payload()
+    first = _post_signed(client, payload)
+    assert first.status_code == 502
+    second = _post_signed(client, payload)
+    assert second.status_code == 200
+    assert "duplicate" not in second.json()
+    assert calls["n"] == 2
+
+
+def test_successful_handling_keeps_claim(client, monkeypatch):
+    """After a delivery fully takes effect, the retry is still deduped."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    calls = {"n": 0}
+
+    async def ok_handle(client_, event):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr("app.pdax.ramp.handle_event", ok_handle)
+    payload = _crypto_payload()
+    assert _post_signed(client, payload).status_code == 200
+    retry = _post_signed(client, payload)
+    assert retry.status_code == 200
+    assert retry.json() == {"received": True, "duplicate": True}
+    assert calls["n"] == 1
+
+
+def test_parse_error_releases_claim(client, monkeypatch):
+    """A payload that fails event validation after claiming must release the
+    claim — the parse never took effect, so a (fixed) retry must not be
+    treated as a duplicate."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    payload = {"asset_type": "crypto", "status": "completed"}  # missing required fields
+    with pytest.raises(ValidationError):
+        _post_signed(client, payload)
+    assert pw.event_key(payload) not in pw._seen_events
 
 
 def test_claim_event_second_claim_rejected():

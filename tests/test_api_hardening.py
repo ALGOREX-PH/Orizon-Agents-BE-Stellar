@@ -24,10 +24,68 @@ def test_health_probe(client):
     assert r.json()["status"] == "ok"
 
 
-def test_readiness_reports_missing_signing_key(client):
+_CONTRACT_ID_FIELDS = (
+    "stellar_agent_registry",
+    "stellar_payment_escrow",
+    "stellar_attestation_registry",
+    "stellar_asset_sac",
+    "stellar_reputation_ledger",
+)
+
+
+def _configure_stellar(monkeypatch) -> None:
+    for field in _CONTRACT_ID_FIELDS:
+        monkeypatch.setattr(settings, field, "C" + "A" * 55)
+
+
+def test_readiness_ready_without_signing_key(client, monkeypatch):
+    """Read-only deployments are legitimate: an absent signer is reported
+    but never fails readiness (config.py doctrine)."""
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "pdax_username", "")
+    monkeypatch.setattr(settings, "pdax_password", "")
     r = client.get("/readiness")
-    assert r.status_code in (200, 503)
-    assert "status" in r.json() or "detail" in r.json()
+    assert r.status_code == 200
+    assert r.json() == {
+        "status": "ready",
+        "llm": "ok",
+        "stellar": "configured",
+        "signer": "absent",
+        "pdax": "unconfigured",
+    }
+
+
+def test_readiness_503_when_llm_key_missing(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["llm"] == "missing_key"
+
+
+def test_readiness_503_when_stellar_incomplete(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_agent_registry", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["stellar"] == "incomplete"
+
+
+def test_readiness_reports_configured_signer_and_pdax(client, monkeypatch):
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_signing_key", "S" + "A" * 55)
+    monkeypatch.setattr(settings, "pdax_username", "ops@example.com")
+    monkeypatch.setattr(settings, "pdax_password", "pw")
+    body = client.get("/readiness").json()
+    assert body["signer"] == "configured"
+    assert body["pdax"] == "configured"
 
 
 def test_charge_rejects_negative_amount(client):
@@ -137,9 +195,132 @@ def test_rate_limit_headers_absent_on_exempt_health(client):
     assert "x-ratelimit-remaining" not in r.headers
 
 
+def test_cors_allows_project_preview_origins(client):
+    for origin in (
+        "https://orizon-agents-fe-stellar.vercel.app",
+        "https://orizon-agents-fe-stellar-git-update-2-team.vercel.app",
+    ):
+        r = client.options(
+            "/api/agents",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_foreign_vercel_origins(client):
+    for origin in (
+        "https://evil.vercel.app",
+        "https://orizon-agents-fe-stellar.vercel.app.evil.com",
+        "http://orizon-agents-fe-stellar.vercel.app",
+    ):
+        r = client.options(
+            "/api/agents",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        assert "access-control-allow-origin" not in r.headers, origin
+
+
+def test_docs_exposed_by_default(client):
+    # docs_enabled defaults on (public demo); flipping it off is applied at
+    # app construction, so only the default is testable here.
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+
+def test_openapi_documents_error_envelope(client):
+    spec = client.get("/openapi.json").json()
+    assert spec["info"]["contact"]["name"] == "Orizon Agents"
+    # pydantic's AnyUrl normalizes a bare origin with a trailing slash
+    assert spec["info"]["contact"]["url"].rstrip("/") == "https://orizons.xyz"
+    assert spec["servers"][0]["url"] == "https://orizon-agents-be-stellar.onrender.com"
+    assert "ErrorEnvelope" in spec["components"]["schemas"]
+    assert set(spec["components"]["schemas"]["ErrorBody"]["properties"]) == {"code", "message", "request_id"}
+    # include_router merges the shared error responses into every operation.
+    for path, method in (("/api/agents", "get"), ("/api/orchestrator/decompose", "post")):
+        responses = spec["paths"][path][method]["responses"]
+        for status in ("429", "500"):
+            ref = responses[status]["content"]["application/json"]["schema"]["$ref"]
+            assert ref.endswith("ErrorEnvelope"), (path, status)
+
+
+def test_access_log_redacts_token_query_value(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        r = client.get("/api/agents?token=supersecret&foo=1")
+    assert r.status_code == 200
+    lines = [
+        rec.getMessage() for rec in caplog.records if rec.name == "app.security" and "/api/agents" in rec.getMessage()
+    ]
+    assert lines, "expected an access log line"
+    joined = "\n".join(lines)
+    assert "supersecret" not in joined
+    assert "token=***" in joined
+    assert "foo=1" in joined
+
+
+def test_redacted_target_masks_every_token_param():
+    from app.security import _redacted_target
+
+    scope = {"path": "/api/trace/stream", "query_string": b"token=abc&access_token=def&x=1"}
+    assert _redacted_target(scope) == "/api/trace/stream?token=***&access_token=***&x=1"
+    assert _redacted_target({"path": "/api/agents", "query_string": b""}) == "/api/agents"
+
+
 def test_security_headers_on_api_response(client):
     r = client.get("/api/agents")
     assert r.status_code == 200
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["referrer-policy"] == "no-referrer"
     assert r.headers["x-frame-options"] == "DENY"
+
+
+def test_500_handler_allows_preview_origin():
+    from app.main import app
+
+    if not any(getattr(r, "path", None) == "/boom-cors-test" for r in app.routes):
+
+        @app.get("/boom-cors-test", include_in_schema=False)
+        async def boom() -> None:
+            raise RuntimeError("boom")
+
+    preview = "https://orizon-agents-fe-stellar-git-update-2-team.vercel.app"
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get("/boom-cors-test", headers={"Origin": preview})
+        assert r.status_code == 500
+        # The hand-rolled CORS in the 500 handler must apply the same regex
+        # as the middleware, or preview deployments can't read the envelope.
+        assert r.headers["access-control-allow-origin"] == preview
+        foreign = c.get("/boom-cors-test", headers={"Origin": "https://evil.vercel.app"})
+        assert foreign.status_code == 500
+        assert "access-control-allow-origin" not in foreign.headers
+
+
+def test_security_headers_on_429():
+    from app.main import SecurityHeadersMiddleware
+
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    # Same composition the app registers: the header middleware wrapping the
+    # limiter, so its 429 short-circuits pick up the hardening headers.
+    inner = Starlette(routes=[Route("/hit", ok)])
+    limited = TestClient(SecurityHeadersMiddleware(RateLimitMiddleware(inner, limit=1, window_seconds=60)))
+
+    assert limited.get("/hit").status_code == 200
+    blocked = limited.get("/hit")
+    assert blocked.status_code == 429
+    assert blocked.headers["x-content-type-options"] == "nosniff"
+    assert blocked.headers["referrer-policy"] == "no-referrer"
+    assert blocked.headers["x-frame-options"] == "DENY"
+
+
+def test_app_orders_header_middleware_outside_limiter():
+    from app.main import app
+
+    names = [m.cls.__name__ for m in app.user_middleware]  # outermost first
+    assert names.index("SecurityHeadersMiddleware") < names.index("RateLimitMiddleware")
+    assert names.index("RateLimitMiddleware") < names.index("BodyLimitMiddleware")
+    # Request-id context is outermost, so 413/429 short-circuits carry it.
+    assert names.index("RequestContextMiddleware") == 0

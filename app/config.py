@@ -27,13 +27,23 @@ class Settings(BaseSettings):
     # ── HTTP / CORS ───────────────────────────────────────────
     cors_origins: str = "http://localhost:3000"
     port: int = 8000
+    # Serve the interactive API docs (/docs, /redoc, /openapi.json). ON by
+    # default — the public demo advertises them; flip off to run dark.
+    docs_enabled: bool = True
 
     # ── Hardening ─────────────────────────────────────────────
     # Optional shared secret for the backend-signing routes. Empty (the
     # demo default) disables the check; set it to require X-API-Key.
     api_key: str = ""
+    # Capability-token authorization for task-scoped reads. OFF by default —
+    # the public demo stays fully open. When enabled, GET task/trace routes
+    # require the per-task read token minted at execute (or a valid API key).
+    task_auth_required: bool = False
     # Per-client-IP sliding-window request budget (in-process, per worker).
     rate_limit_per_minute: int = 120
+    # Ceiling on concurrently running workflows (each fans out LLM calls).
+    # execute returns 503 "capacity_exhausted" once this many are in flight.
+    orchestrator_max_concurrent: int = 8
     # Ceiling for a single PaymentEscrow.charge, in USDC.
     max_charge_usdc: float = 100.0
 

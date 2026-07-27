@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -17,12 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.utils import is_body_allowed_for_status_code
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
 from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
 from .security import (
+    BodyLimitMiddleware,
     RateLimitMiddleware,
     RequestContextMiddleware,
     RequestIdLogFilter,
@@ -71,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     seed_registry()
     # Bound the default executor: asyncio.to_thread otherwise sizes it to
     # min(32, cpu_count + 4) from the HOST's core count, while Render grants
@@ -123,12 +126,29 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+# DOCS_ENABLED=false hides /docs, /redoc, and the schema on locked-down
+# deployments. Read via getattr — config.py declares the field separately —
+# so the public-demo default (docs on) holds either way.
+_docs_enabled = bool(getattr(settings, "docs_enabled", True))
+
 app = FastAPI(
     title="Orizon Agents API",
     version="0.1.0",
-    description="The orchestration layer for autonomous digital labor.",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+    description=(
+        "The orchestration layer for autonomous digital labor: goal decomposition "
+        "across a priced agent network, Soroban-settled payments and reputation on "
+        "Stellar, and PDAX fiat on/off-ramping. Errors use a unified envelope — the "
+        'legacy "detail" key plus an "error" object with a stable code, message, '
+        "and request id."
+    ),
+    contact={"name": "Orizon Agents", "url": "https://orizons.xyz"},
+    servers=[{"url": "https://orizon-agents-be-stellar.onrender.com", "description": "production"}],
     lifespan=lifespan,
     openapi_tags=[
+        {"name": "meta", "description": "Service identity and health/readiness probes."},
         {"name": "agents", "description": "Registered agents and their skills, pricing, and reputation."},
         {"name": "orchestrator", "description": "Decompose a goal into a plan and execute it across agents."},
         {"name": "tasks", "description": "Task history, status, and produced artifacts."},
@@ -141,20 +161,37 @@ app = FastAPI(
     ],
 )
 
-# Added first → runs innermost: hardening headers land on every app response.
-app.add_middleware(SecurityHeadersMiddleware)
+# Added first → runs innermost: oversized bodies are rejected before the
+# router, while the 413 still passes through the header/CORS/request-id
+# layers wrapping it.
+app.add_middleware(BodyLimitMiddleware)
 
 # Registered before CORS so CORS wraps it and 429 responses still carry
 # the Access-Control-Allow-Origin header the browser needs to read them.
 app.add_middleware(RateLimitMiddleware)
 
+# Wraps the rate limiter (and everything inside it), so the limiter's 429
+# short-circuits — and the body limiter's 413s — carry the hardening
+# headers too, not just responses that reached the router.
+app.add_middleware(SecurityHeadersMiddleware)
+
+# This project's Vercel production/preview origins only — a broad
+# `.*\.vercel\.app` would let ANY hosted Vercel page drive the
+# unauthenticated LLM routes from visitors' browsers.
+_CORS_ORIGIN_REGEX = re.compile(r"^https://orizon-agents-fe-stellar(-[a-z0-9-]+)?\.vercel\.app$")
+
+
+def _cors_allows(origin: str) -> bool:
+    """Mirror the CORS middleware's decision — the exact allow-list OR the
+    compiled origin regex — for handlers that must stamp CORS headers by
+    hand (the 500 handler runs outside the middleware stack)."""
+    return origin in settings.cors_origin_list or _CORS_ORIGIN_REGEX.fullmatch(origin) is not None
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    # Accept every Vercel preview / production domain without needing to
-    # re-list them in CORS_ORIGINS. Tighten this regex once the final prod
-    # subdomain is known (e.g. r"^https://orizon-agents(-.*)?\.vercel\.app$").
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=_CORS_ORIGIN_REGEX.pattern,
     # The API is token/header-based — no cookies — so credentials stay off,
     # and only the methods/headers the frontend actually sends are allowed.
     allow_credentials=False,
@@ -174,6 +211,31 @@ app.add_middleware(RequestContextMiddleware)
 # Details that are already machine-readable tokens ("invalid_api_key",
 # "build_failed") are promoted to the envelope's error code as-is.
 _SNAKE_TOKEN = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+
+
+class ErrorBody(BaseModel):
+    """Structured half of the unified error envelope."""
+
+    code: str
+    message: str
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    """Every error response body: the legacy FastAPI "detail" (string or
+    validation-error list) plus the structured "error" object."""
+
+    detail: Any
+    error: ErrorBody
+
+
+# Merged into every routed operation via include_router below, so the docs
+# show the envelope on the error statuses any endpoint can produce.
+_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorEnvelope, "description": "Request validation failed."},
+    429: {"model": ErrorEnvelope, "description": "Rate limited — retry after the indicated delay."},
+    500: {"model": ErrorEnvelope, "description": "Unhandled server error."},
+}
 
 
 def _error_envelope(detail: Any, code: str, message: str) -> dict[str, Any]:
@@ -239,7 +301,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     if request_id != "-":
         headers["x-request-id"] = request_id
     origin = request.headers.get("origin")
-    if origin and origin in settings.cors_origin_list:
+    if origin and _cors_allows(origin):
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
     return JSONResponse(
@@ -249,23 +311,23 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-app.include_router(agents.router, prefix="/api")
-app.include_router(orchestrator.router, prefix="/api")
-app.include_router(tasks.router, prefix="/api")
-app.include_router(trace.router, prefix="/api")
-app.include_router(metrics.router, prefix="/api")
-app.include_router(flow.router, prefix="/api")
-app.include_router(payments.router, prefix="/api")
-app.include_router(stellar.router, prefix="/api")
-app.include_router(pdax.router, prefix="/api")
+app.include_router(agents.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(orchestrator.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(tasks.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(trace.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(metrics.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(flow.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(payments.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(stellar.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(pdax.router, prefix="/api", responses=_ERROR_RESPONSES)
 
 
-@app.get("/")
+@app.get("/", tags=["meta"], summary="Service identity ping")
 async def root() -> dict[str, str]:
     return {"service": "orizon-agents", "status": "online"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"], summary="Liveness probe")
 async def health() -> dict[str, Any]:
     """Liveness probe — process is up and serving."""
     return {
@@ -275,17 +337,48 @@ async def health() -> dict[str, Any]:
     }
 
 
-@app.get("/readiness")
-async def readiness() -> JSONResponse:
-    """Readiness probe — reports which required Stellar settings are missing."""
-    missing: list[str] = []
-    if not settings.stellar_signing_key:
-        missing.append("STELLAR_SIGNING_KEY")
-    if not settings.stellar_rpc_url:
-        missing.append("STELLAR_RPC_URL")
-    if missing:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "missing": missing},
-        )
-    return JSONResponse(content={"status": "ready", "missing": []})
+class ReadinessResponse(BaseModel):
+    """Per-dependency readiness report. Purely config-derived — no live
+    network calls, so the probe stays cheap and deterministic."""
+
+    status: str  # "ready" | "not_ready"
+    llm: str  # "ok" | "missing_key"
+    stellar: str  # "configured" | "incomplete"
+    signer: str  # "configured" | "absent" — informational, never gates readiness
+    pdax: str  # "configured" | "unconfigured" — informational
+
+
+@app.get(
+    "/readiness",
+    tags=["meta"],
+    summary="Readiness probe with per-dependency status",
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse, "description": "A required dependency is not configured."}},
+)
+async def readiness(response: Response) -> ReadinessResponse:
+    """503 only when a dependency the API cannot serve without is missing:
+    the LLM key or the Stellar contract/RPC config. The signing key is
+    deliberately informational — read-only deployments are legitimate."""
+    llm = "ok" if settings.openai_api_key else "missing_key"
+
+    contract_ids = (
+        settings.stellar_agent_registry,
+        settings.stellar_payment_escrow,
+        settings.stellar_attestation_registry,
+        settings.stellar_asset_sac,
+    )
+    stellar_ok = bool(settings.stellar_rpc_url) and all(contract_ids)
+    # The reputation ledger only matters while reputation-gated routing is on.
+    if settings.reputation_enabled and not settings.stellar_reputation_ledger:
+        stellar_ok = False
+
+    ready = llm == "ok" and stellar_ok
+    if not ready:
+        response.status_code = 503
+    return ReadinessResponse(
+        status="ready" if ready else "not_ready",
+        llm=llm,
+        stellar="configured" if stellar_ok else "incomplete",
+        signer="configured" if settings.stellar_signing_key else "absent",
+        pdax="configured" if settings.pdax_username and settings.pdax_password else "unconfigured",
+    )

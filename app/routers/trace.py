@@ -1,32 +1,46 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from ..schemas import TraceLine
 from ..state import state
+from ..task_auth import require_task_read
 from ..trace_bus import bus
 
 router = APIRouter(tags=["trace"])
 
 
-@router.get("/trace/{task_id}", response_model=list[TraceLine])
+@router.get(
+    "/trace/{task_id}",
+    response_model=list[TraceLine],
+    summary="Get a task's recorded trace",
+    dependencies=[Depends(require_task_read)],
+)
 async def get_trace(task_id: str) -> list[TraceLine]:
     if task_id not in state.traces and task_id not in state.tasks:
         raise HTTPException(404, f"unknown task: {task_id}")
     return state.traces.get(task_id, [])
 
 
-def _replay_events(task_id: str):
+def _replay_events(task_id: str) -> Iterator[dict[str, str]]:
     for line in state.traces.get(task_id, []):
         yield {"event": "trace", "data": line.model_dump_json()}
 
 
-@router.get("/trace/{task_id}/stream")
+@router.get(
+    "/trace/{task_id}/stream",
+    summary="Stream a task's trace as SSE",
+    dependencies=[Depends(require_task_read)],
+)
 async def stream_trace(task_id: str) -> EventSourceResponse:
     """Server-Sent Events — replays the existing trace then streams live lines.
+
+    The task-auth guard accepts the read token as a `?token=` query parameter
+    here because EventSource cannot set request headers.
 
     Client disconnects are handled by sse-starlette cancelling the generator
     (the finally block unsubscribes); polling request.is_disconnected() here
@@ -42,7 +56,7 @@ async def stream_trace(task_id: str) -> EventSourceResponse:
         # Finished (or never started) — replay history and end the stream.
         # No subscription: no producer exists, so a live queue would only
         # ping forever and leak.
-        async def replay():
+        async def replay() -> AsyncIterator[dict[str, str]]:
             for event in _replay_events(task_id):
                 yield event
             yield {"event": "done", "data": "{}"}
@@ -51,7 +65,7 @@ async def stream_trace(task_id: str) -> EventSourceResponse:
 
     queue = bus.subscribe(task_id)
 
-    async def generator():
+    async def generator() -> AsyncIterator[dict[str, str]]:
         try:
             # Replay anything already recorded so late subscribers see full history.
             for event in _replay_events(task_id):

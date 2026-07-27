@@ -91,15 +91,18 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-173 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed. `ruff check`, `ruff format --check`, and `mypy` (config in `pyproject.toml`) guard style and types; CI runs all four on every push and PR.
+224 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed. `ruff check`, `ruff format --check`, `mypy` (strict-defs), and a 75% coverage floor guard the suite; CI runs all of them on every push and PR, and `make check` runs the same gate locally.
 
 ## Environment variables
 
 | name | default | purpose |
 | --- | --- | --- |
 | `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` and all non-public `/api/pdax/*` routes require a matching `X-API-Key` header |
+| `TASK_AUTH_REQUIRED` | `false` | when true, task/trace/artifact reads require the per-task `read_token` returned by execute |
+| `ORCHESTRATOR_MAX_CONCURRENT` | `8` | in-flight workflow ceiling — excess execute calls get a 503 `capacity_exhausted` |
 | `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
 | `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
+| `DOCS_ENABLED` | `true` | serve `/docs`, `/redoc`, and `/openapi.json` |
 
 Everything else (model IDs, contract addresses, RPC, PDAX sandbox) is documented in `.env.example` — copy it to `.env` and fill in what you need.
 
@@ -158,7 +161,8 @@ The contracts are live on Stellar **mainnet** — `render.yaml` ships these as t
 - Every response carries hardening headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
 - Every response echoes an `X-Request-ID` (yours, or a generated one). Logs leave as single-line JSON — every record (access line and service logs alike) carries the request id, so a 500 and its traceback correlate.
 - Error responses share one envelope: the legacy `detail` plus `error: {code, message, request_id}` — the same shape for 4xx, validation errors, 429s, and 500s.
-- Storage is in-memory. State resets on restart.
-- Public-demo scope: task history (`/api/tasks`, traces, artifacts) is world-readable by design so visitors can watch runs. Session-scoped task auth is the planned next step before real users bring real intents.
+- **Durability**: storage is in-memory by design — task history, traces, and PDAX ramp records reset on every restart (Render's free tier idles out routinely). Durable facts live on-chain. Do not run real-money PDAX ramps on this deployment; move ramp state to a persistent store first (that project pairs naturally with going multi-worker).
+- Public-demo scope: task history (`/api/tasks`, traces, artifacts) is world-readable **by default** so visitors can watch runs. Capability-token auth is fully wired — every execute response returns a `read_token`, and setting `TASK_AUTH_REQUIRED=true` enforces it on task/trace/artifact reads (the token rides an `X-Task-Token` header, or `?token=` for SSE; a valid `X-API-Key` bypasses for ops). Flip the env var when real users bring real intents.
+- `/docs`, `/redoc`, and `/openapi.json` are public on purpose — this is a showcase API. Set `DOCS_ENABLED=false` to turn them off.
 - 4 real Agno workers (`copywrite.v3`, `seo.brief`, `research.pro`, `sol-audit`) + `code.gen`; the remaining workers are mocks.
 - Payments and ERC-8004 proofs are simulated unless `STELLAR_SIGNING_KEY` is set — then they become real testnet transactions.

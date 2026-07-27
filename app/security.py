@@ -8,6 +8,10 @@ Lightweight, dependency-free hardening primitives.
   pure ASGI middleware (no external deps). Window/limit come from settings;
   liveness paths and CORS preflights are exempt. Rate-limited responses
   carry `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers.
+- `BodyLimitMiddleware` — pure ASGI request-body size cap. Rejects declared
+  Content-Length over the limit up front and counts streamed (chunked)
+  bodies as the app reads them, answering 413 either way. Per-path
+  overrides tighten the budget for routes that buffer the whole body.
 - `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
   INFO access log per request (method, path, status, duration, id).
 """
@@ -18,6 +22,7 @@ import contextvars
 import json
 import logging
 import math
+import re
 import secrets
 import time
 import uuid
@@ -36,6 +41,20 @@ EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
 # Current request's id — set by RequestContextMiddleware, readable from any
 # code running in the request's task context (error handlers, log records).
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+# Credential-bearing query values (the SSE routes take `?token=`) must not
+# reach the access log; only the parameter name survives.
+_TOKEN_QUERY_RE = re.compile(r"(^|&)([^&=]*token)=[^&]*")
+
+
+def _redacted_target(scope: dict) -> str:
+    """Path plus query string, with any `*token=` values masked for logging."""
+    path = scope.get("path", "-")
+    query = (scope.get("query_string") or b"").decode("latin-1")
+    if not query:
+        return str(path)
+    return f"{path}?{_TOKEN_QUERY_RE.sub(r'\1\2=***', query)}"
 
 
 class RequestIdLogFilter(logging.Filter):
@@ -124,7 +143,10 @@ class RequestContextMiddleware:
                     logger.info(
                         "%s %s -> %s in %.1fms [%s] client=%s",
                         method,
-                        path,
+                        # Path + query with token values masked: SSE auth
+                        # tokens ride in the query string and must not be
+                        # recoverable from logs.
+                        _redacted_target(scope),
                         message.get("status"),
                         duration_ms,
                         request_id,
@@ -135,6 +157,103 @@ class RequestContextMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_context)
+
+
+class _BodyTooLarge(Exception):
+    """Internal signal: a streamed request body crossed the size limit."""
+
+
+class BodyLimitMiddleware:
+    """Cap request-body size (pure ASGI, no deps). Nothing else in the stack
+    limits bodies — uvicorn and Starlette accept arbitrarily large uploads —
+    so without this a single request can exhaust worker memory (the PDAX
+    webhook route, for one, buffers the whole body before its HMAC check).
+
+    A declared Content-Length above the limit is refused immediately with
+    413; chunked/streamed bodies are counted as the app reads them and
+    aborted at the limit. 413 bodies use the app's unified error envelope.
+    """
+
+    DEFAULT_LIMIT = 1_048_576  # 1 MiB — comfortably above any legitimate payload
+    # Routes that buffer the entire body up front get a tighter budget.
+    PATH_LIMITS: dict[str, int] = {"/api/pdax/webhooks/receive": 65_536}
+
+    def __init__(
+        self,
+        app: Any,
+        limit: int | None = None,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
+        self.app = app
+        self.limit = self.DEFAULT_LIMIT if limit is None else limit
+        self.path_limits = dict(self.PATH_LIMITS) if path_limits is None else path_limits
+
+    @staticmethod
+    async def _send_413(send: Any) -> None:
+        body = json.dumps(
+            {
+                # Same envelope the app's exception handlers emit.
+                "detail": "request_too_large",
+                "error": {
+                    "code": "request_too_large",
+                    "message": "request body exceeds the size limit",
+                    "request_id": request_id_var.get(),
+                },
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        limit = self.path_limits.get(scope.get("path", ""), self.limit)
+        headers = dict(scope.get("headers") or [])
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                if int(declared) > limit:
+                    await self._send_413(send)
+                    return
+            except ValueError:
+                pass  # malformed length — the server rejects it downstream
+
+        # Chunked (or lying) bodies: meter the bytes the app actually reads.
+        received = 0
+        response_started = False
+
+        async def receive_limited() -> dict:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _BodyTooLarge  # unwinds the endpoint mid-read
+            return message
+
+        async def send_tracking(message: dict) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive_limited, send_tracking)
+        except _BodyTooLarge:
+            if response_started:
+                raise  # too late for a 413 — let the server drop the connection
+            await self._send_413(send)
 
 
 class RateLimitMiddleware:

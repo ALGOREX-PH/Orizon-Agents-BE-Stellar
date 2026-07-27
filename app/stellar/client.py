@@ -34,6 +34,7 @@ from stellar_sdk import (
 from stellar_sdk.client.requests_client import RequestsClient
 from stellar_sdk.exceptions import PrepareTransactionException
 from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
+from stellar_sdk.xdr import SCVal
 
 from ..config import settings
 
@@ -310,6 +311,25 @@ async def invoke_with_server_key_async(
     return await _poll_final(tx_hash, _finalize_invoke)
 
 
+def _submit_rating_args(
+    agent_id: str,
+    job_id: bytes,
+    rating_0_to_100: int,
+    weight_stroops: int,
+    payer: str,
+    kind: str,
+) -> list[Any]:
+    return [
+        addr(signer_public_key()),
+        sym(agent_id),
+        bytes16(job_id),
+        u32(rating_0_to_100),
+        i128(weight_stroops),
+        addr(payer),
+        sym(kind),
+    ]
+
+
 def submit_rating(
     agent_id: str,
     job_id: bytes,
@@ -318,19 +338,36 @@ def submit_rating(
     payer: str,
     kind: str = "auto",
 ) -> dict[str, Any]:
-    """ReputationLedger.submit signed by the backend scorer key."""
+    """ReputationLedger.submit signed by the backend scorer key.
+
+    Sync variant — polls with time.sleep. On the event loop prefer
+    `submit_rating_async`, which waits between polls on the loop.
+    """
     return invoke_with_server_key(
         contract_ids().reputation_ledger,
         "submit",
-        [
-            addr(signer_public_key()),
-            sym(agent_id),
-            bytes16(job_id),
-            u32(rating_0_to_100),
-            i128(weight_stroops),
-            addr(payer),
-            sym(kind),
-        ],
+        _submit_rating_args(agent_id, job_id, rating_0_to_100, weight_stroops, payer, kind),
+    )
+
+
+async def submit_rating_async(
+    agent_id: str,
+    job_id: bytes,
+    rating_0_to_100: int,
+    weight_stroops: int,
+    payer: str,
+    kind: str = "auto",
+) -> dict[str, Any]:
+    """Async submit_rating: submit in a worker thread, wait on the loop.
+
+    Same call and return shape as `submit_rating`, but built on
+    `invoke_with_server_key_async` so the ~30s status poll never pins an
+    executor thread.
+    """
+    return await invoke_with_server_key_async(
+        contract_ids().reputation_ledger,
+        "submit",
+        _submit_rating_args(agent_id, job_id, rating_0_to_100, weight_stroops, payer, kind),
     )
 
 
@@ -470,32 +507,32 @@ def _extract_return_value(result_meta_xdr: str | None) -> Any:
 
 
 # ── helpers for arg encoding ────────────────────────────────────────────
-def sym(s: str):
+def sym(s: str) -> SCVal:
     return scval.to_symbol(s)
 
 
-def addr(a: str):
+def addr(a: str) -> SCVal:
     return scval.to_address(Address(a))
 
 
-def i128(v: int):
+def i128(v: int) -> SCVal:
     return scval.to_int128(v)
 
 
-def u64(v: int):
+def u64(v: int) -> SCVal:
     return scval.to_uint64(v)
 
 
-def u32(v: int):
+def u32(v: int) -> SCVal:
     return scval.to_uint32(v)
 
 
-def bytes16(b: bytes):
+def bytes16(b: bytes) -> SCVal:
     assert len(b) == 16
     return scval.to_bytes(b)
 
 
-def bytes32(b: bytes):
+def bytes32(b: bytes) -> SCVal:
     assert len(b) == 32
     return scval.to_bytes(b)
 

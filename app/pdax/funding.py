@@ -15,15 +15,16 @@ from .models.funding import (
     FiatDepositRequest,
     FiatDepositResult,
 )
+from .trade import _unwrap
 
 
 async def crypto_deposit_address(client: PdaxClient, currency: str) -> CryptoDepositAddress:
     data = await client.request("GET", "pdax-institution/v1/crypto/deposit", params={"currency": currency})
-    return CryptoDepositAddress(**data["data"])
+    return _unwrap(data, CryptoDepositAddress)
 
 
 async def fiat_deposit(client: PdaxClient, req: FiatDepositRequest) -> FiatDepositResult:
     validation.validate_fiat_deposit(req)
     data = await client.request("POST", "pdax-institution/v1/fiat/deposit", json=req.model_dump(exclude_none=True))
     # Fiat deposit returns a flat payload (no envelope).
-    return FiatDepositResult(**(data.get("data", data)))
+    return _unwrap(data, FiatDepositResult, enveloped=False)

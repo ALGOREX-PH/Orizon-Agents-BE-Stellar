@@ -7,10 +7,24 @@ line-length = 120
 python_version = "3.12"
 files = ["app"]
 check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 # agno and stellar-sdk ship without stubs; don't let that block adoption.
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["app"]
+# Demo kits are embedded literal payloads, not logic.
+omit = ["app/demo_kits/kits/*"]
+
+[tool.coverage.report]
+# Current coverage is 78% — the floor catches regressions without blocking
+# work on the hard-to-test signing paths. Ratchet upward as they get covered.
+fail_under = 75
+skip_covered = true
+show_missing = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

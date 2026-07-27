@@ -1,0 +1,8 @@
+# Fast hooks only — mypy and pytest stay in CI where their runtime belongs.
+# Install once with: .venv/bin/pip install pre-commit && .venv/bin/pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
