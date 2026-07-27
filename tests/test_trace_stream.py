@@ -1,6 +1,7 @@
 """SSE trace streams must terminate: a finished task replays history and ends
 with `done` instead of pinging forever, and the bus never leaks subscriber
 queues or empty _subs keys."""
+
 from __future__ import annotations
 
 import asyncio
@@ -53,12 +54,8 @@ def test_stream_of_completed_task_replays_and_terminates(client):
 
 
 def test_subscriber_during_run_gets_history_and_done(client):
-    plan = client.post(
-        "/api/orchestrator/decompose", json={"intent": "pomodoro timer app"}
-    ).json()
-    task_id = client.post(
-        "/api/orchestrator/execute", json={"plan_id": plan["plan_id"]}
-    ).json()["task_id"]
+    plan = client.post("/api/orchestrator/decompose", json={"intent": "pomodoro timer app"}).json()
+    task_id = client.post("/api/orchestrator/execute", json={"plan_id": plan["plan_id"]}).json()["task_id"]
 
     # Subscribe mid-run (or just after — the finished path also ends in done).
     events = _collect_events(client, task_id)

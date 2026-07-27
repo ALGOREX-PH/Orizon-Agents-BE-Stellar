@@ -1,5 +1,6 @@
 """Shared test setup — force a hermetic, offline configuration before the app
 is imported so tests never touch OpenAI, PDAX, or the real signing key."""
+
 from __future__ import annotations
 
 import os

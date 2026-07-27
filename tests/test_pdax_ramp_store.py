@@ -1,5 +1,6 @@
 """Bounded ramp store: hard cap, terminal-first eviction, lock + payout
 cleanup on eviction."""
+
 from __future__ import annotations
 
 import pytest
@@ -20,9 +21,7 @@ def clean_ramp_state():
 
 
 def _rec(i: int, status: str = "completed") -> RampRecord:
-    return RampRecord(
-        ramp_id=f"r{i}", direction="onramp", status=status, created_at="t"
-    )
+    return RampRecord(ramp_id=f"r{i}", direction="onramp", status=status, created_at="t")
 
 
 def test_store_never_exceeds_cap(monkeypatch):

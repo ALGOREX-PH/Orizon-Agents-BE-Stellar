@@ -36,11 +36,7 @@ async def stream_trace(task_id: str) -> EventSourceResponse:
         raise HTTPException(404, f"unknown task: {task_id}")
 
     task = state.tasks.get(task_id)
-    running = (
-        task is not None
-        and task.status in ("pending", "running")
-        and not bus.is_closed(task_id)
-    )
+    running = task is not None and task.status in ("pending", "running") and not bus.is_closed(task_id)
 
     if not running:
         # Finished (or never started) — replay history and end the stream.

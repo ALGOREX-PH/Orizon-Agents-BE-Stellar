@@ -8,8 +8,16 @@ TETRIS_KIT = DemoKit(
         tagline="Cyber-arcade falling-blocks, reimagined for the browser.",
         audience=["web-3 gamers", "speedrunners", "retro arcade fans"],
         keywords=[
-            "tetris", "neon", "arcade", "block puzzle", "browser game",
-            "single-file html", "keyboard", "high score", "T-spin", "B2B",
+            "tetris",
+            "neon",
+            "arcade",
+            "block puzzle",
+            "browser game",
+            "single-file html",
+            "keyboard",
+            "high score",
+            "T-spin",
+            "B2B",
         ],
     ),
     features=[
@@ -53,9 +61,9 @@ TETRIS_KIT = DemoKit(
         border="#2A1750",
         text="#F5F0FF",
         muted="#8A78B8",
-        primary="#B026FF",   # violet
-        accent="#00FFD1",    # cyan
-        danger="#FF2EC4",    # magenta
+        primary="#B026FF",  # violet
+        accent="#00FFD1",  # cyan
+        danger="#FF2EC4",  # magenta
     ),
     typography=TypographySpec(
         family_ui="'Space Grotesk', system-ui, sans-serif",

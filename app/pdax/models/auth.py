@@ -5,6 +5,7 @@ POST /login returns either a full token set (no MFA) or an MFA challenge.
 POST /login/otp and PUT /refresh-token both return a `TokenSet`. Access and
 id tokens live 10 minutes; the refresh token lives 30 days.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

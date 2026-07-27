@@ -1,5 +1,6 @@
 """The money-movement API must document real response schemas in OpenAPI,
 not bare {} objects."""
+
 from __future__ import annotations
 
 import pytest

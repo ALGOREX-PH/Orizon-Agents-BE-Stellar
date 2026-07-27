@@ -1,6 +1,7 @@
 """Ramp orchestration against a fake PdaxClient: full on/off-ramp lifecycle,
 duplicate-webhook idempotency, and off-ramp payout PII dropped once the
 advance step finishes (success or failure)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -95,9 +96,7 @@ def _offramp_client() -> FakePdaxClient:
     return FakePdaxClient(
         {
             "v2/trade/price": {"data": _quote("sell")},
-            "v1/crypto/deposit": {
-                "data": {"currency": "USDCXLM", "address": "GDEPOSIT", "tag": None}
-            },
+            "v1/crypto/deposit": {"data": {"currency": "USDCXLM", "address": "GDEPOSIT", "tag": None}},
             "v2/trade/quote": {"data": _quote("sell")},
             "v1/trade": {"data": _order("sell")},
             "v1/fiat/withdraw": {
@@ -130,9 +129,7 @@ def test_offramp_payout_popped_after_completion():
 
 def test_offramp_payout_popped_even_on_failure():
     client = _offramp_client()
-    client.responses["v2/trade/quote"] = PdaxError(
-        "Insufficient balance.", code="OT010006", http_status=400
-    )
+    client.responses["v2/trade/quote"] = PdaxError("Insufficient balance.", code="OT010006", http_status=400)
 
     async def run():
         record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))

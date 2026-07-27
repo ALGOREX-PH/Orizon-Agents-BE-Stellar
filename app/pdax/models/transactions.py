@@ -5,6 +5,7 @@ GET /v1/fiat/transactions filters by mode (CashIn/CashOut) and identifier;
 GET /v1/crypto/transactions filters by identifier, txn_hash, or type. Both
 paginate via page/pageSize.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

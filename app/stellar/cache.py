@@ -21,6 +21,7 @@ Concurrency model — single-flight with shield:
     hard-down RPC doesn't fan out a fresh upstream call per request: within
     the window the cached exception is re-raised without spawning work.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,9 +76,7 @@ async def get_or_set(
     return await asyncio.shield(task)
 
 
-async def _produce(
-    key: str, ttl_seconds: float, producer: Callable[[], Awaitable[Any]]
-) -> Any:
+async def _produce(key: str, ttl_seconds: float, producer: Callable[[], Awaitable[Any]]) -> Any:
     try:
         value = await producer()
     except Exception as e:

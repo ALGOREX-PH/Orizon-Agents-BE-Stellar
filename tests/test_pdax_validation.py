@@ -1,4 +1,5 @@
 """PDAX surface: webhook fail-closed, ramp input validation."""
+
 from __future__ import annotations
 
 VALID_G = "G" + "A" * 55

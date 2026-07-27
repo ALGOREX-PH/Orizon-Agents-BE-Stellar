@@ -8,8 +8,16 @@ CALCULATOR_KIT = DemoKit(
         tagline="Scientific calculator with history, memory, and a real keyboard.",
         audience=["engineers", "students", "researchers", "power users"],
         keywords=[
-            "calculator", "scientific", "memory", "history", "keyboard",
-            "single-file html", "browser", "BODMAS", "parentheses", "copy",
+            "calculator",
+            "scientific",
+            "memory",
+            "history",
+            "keyboard",
+            "single-file html",
+            "browser",
+            "BODMAS",
+            "parentheses",
+            "copy",
         ],
     ),
     features=[
@@ -53,8 +61,8 @@ CALCULATOR_KIT = DemoKit(
         border="#2C2548",
         text="#F2EEFB",
         muted="#8B83A8",
-        primary="#7A5CFF",   # violet
-        accent="#00FFD1",    # cyan
+        primary="#7A5CFF",  # violet
+        accent="#00FFD1",  # cyan
         danger="#FF4D6D",
     ),
     typography=TypographySpec(

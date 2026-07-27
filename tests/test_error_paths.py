@@ -1,5 +1,6 @@
 """Error-path behavior: the 500 envelope, non-ASCII auth headers, rate-limit
 keying on the trusted proxy hop, and X-Request-ID propagation."""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -68,19 +69,10 @@ def test_rate_limiter_keys_on_last_forwarded_hop():
     limited = TestClient(RateLimitMiddleware(inner, limit=1, window_seconds=60))
 
     # Rotating the client-controlled leftmost hop must NOT mint fresh buckets.
-    assert (
-        limited.get("/hit", headers={"X-Forwarded-For": "1.1.1.1, 9.9.9.9"}).status_code
-        == 200
-    )
-    assert (
-        limited.get("/hit", headers={"X-Forwarded-For": "2.2.2.2, 9.9.9.9"}).status_code
-        == 429
-    )
+    assert limited.get("/hit", headers={"X-Forwarded-For": "1.1.1.1, 9.9.9.9"}).status_code == 200
+    assert limited.get("/hit", headers={"X-Forwarded-For": "2.2.2.2, 9.9.9.9"}).status_code == 429
     # A genuinely different trusted (last) hop gets its own bucket.
-    assert (
-        limited.get("/hit", headers={"X-Forwarded-For": "1.1.1.1, 8.8.8.8"}).status_code
-        == 200
-    )
+    assert limited.get("/hit", headers={"X-Forwarded-For": "1.1.1.1, 8.8.8.8"}).status_code == 200
 
 
 def test_request_id_echoed_when_supplied(client):

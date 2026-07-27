@@ -4,6 +4,7 @@ Shared PDAX models — response envelope, pagination, and common literals.
 Most PDAX endpoints wrap their payload in `{ "data": ..., "status": "success" }`.
 `Envelope` captures that shape; domain models describe the inner `data`.
 """
+
 from __future__ import annotations
 
 from typing import Generic, Literal, TypeVar

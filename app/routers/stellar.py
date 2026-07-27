@@ -6,6 +6,7 @@ Write routes have two shapes:
   - build-*   → returns unsigned XDR for Freighter to sign
   - submit    → takes Freighter-signed XDR and broadcasts it
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stellar", tags=["stellar"])
 
+
 # ── response models (shapes match the existing payloads exactly) ──
 class NetworkInfo(BaseModel):
     network: str
@@ -47,12 +49,12 @@ class ReputationInfo(BaseModel):
     """Smoothed reputation for one agent (mirror of reputation_svc.RepInfo)."""
 
     agent_id: str
-    smoothed_bps: int      # prior-smoothed mean, 0..10_000
-    lower_bound_bps: int   # conservative bound used for the routing floor
-    avg_bps: int           # unsmoothed decayed on-chain mean (0 = no evidence)
-    count: int             # lifetime rating count
-    weight: int            # decayed evidence mass, stroops
-    disputed: int          # lifetime dispute count
+    smoothed_bps: int  # prior-smoothed mean, 0..10_000
+    lower_bound_bps: int  # conservative bound used for the routing floor
+    avg_bps: int  # unsmoothed decayed on-chain mean (0 = no evidence)
+    count: int  # lifetime rating count
+    weight: int  # decayed evidence mass, stroops
+    disputed: int  # lifetime dispute count
     dispute_rate_bps: int  # disputed / count, in bps
     source: Literal["onchain", "prior"]
 
@@ -70,16 +72,16 @@ class ReputationParams(BaseModel):
     by the backend plus the deployed ledger's on-chain decay constants."""
 
     enabled: bool
-    prior_bps: int                  # Bayesian prior mean, bps of the 0-100 scale
-    prior_weight_usdc: float        # evidence mass of the prior, USDC
-    floor_bps: int                  # routing floor on the Wilson lower bound
-    max_rating_weight_usdc: float   # per-rating weight cap
-    read_ttl_seconds: float         # cache TTL for on-chain rep_state reads
-    wilson_z: float                 # z of the one-sided lower confidence bound
-    epoch_seconds: int              # on-chain decay epoch length
-    decay_bps_per_epoch: int        # evidence retained per epoch, bps
-    max_decay_epochs: int           # full-forget horizon
-    contract_id: str                # deployed ReputationLedger id ("" if unset)
+    prior_bps: int  # Bayesian prior mean, bps of the 0-100 scale
+    prior_weight_usdc: float  # evidence mass of the prior, USDC
+    floor_bps: int  # routing floor on the Wilson lower bound
+    max_rating_weight_usdc: float  # per-rating weight cap
+    read_ttl_seconds: float  # cache TTL for on-chain rep_state reads
+    wilson_z: float  # z of the one-sided lower confidence bound
+    epoch_seconds: int  # on-chain decay epoch length
+    decay_bps_per_epoch: int  # evidence retained per epoch, bps
+    max_decay_epochs: int  # full-forget horizon
+    contract_id: str  # deployed ReputationLedger id ("" if unset)
     network: str
 
 
@@ -135,6 +137,7 @@ AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
 async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> AgentRead:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
+
         async def _fetch():
             return await asyncio.to_thread(
                 sc.simulate_read,
@@ -161,9 +164,7 @@ async def read_reputations() -> ReputationBatch:
     """
     infos = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
     return ReputationBatch(
-        reputations={
-            aid: ReputationInfo(**info.model_dump()) for aid, info in infos.items()
-        },
+        reputations={aid: ReputationInfo(**info.model_dump()) for aid, info in infos.items()},
         floor_bps=settings.reputation_floor_bps,
         prior_bps=settings.reputation_prior_bps,
     )
@@ -218,9 +219,7 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
                 [sc.bytes16(jid)],
             )
 
-        result = await rcache.get_or_set(
-            f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch
-        )
+        result = await rcache.get_or_set(f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch)
         return AttestationRead(attestation=result)
     except Exception as e:
         logger.exception("attestation read failed for %s", job_id_hex)
@@ -229,14 +228,10 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
 
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
-    owner: str = Field(
-        ..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner"
-    )
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner")
     agent_id: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
-        default_factory=list, max_length=16
-    )
+    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(default_factory=list, max_length=16)
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
@@ -245,6 +240,7 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
     try:
         from stellar_sdk import scval as _sv
+
         args = [
             sc.addr(req.owner),
             sc.sym(req.agent_id),
@@ -354,16 +350,10 @@ async def server_charge(req: ChargeReq) -> dict:
 
 class SealReq(BaseModel):
     job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
-    orchestrator: str = Field(
-        ..., pattern=r"^G[A-Z2-7]{55}$"
-    )  # G-address of the workflow owner
+    orchestrator: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")  # G-address of the workflow owner
     intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
-    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
-        ..., max_length=32
-    )
-    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(
-        ..., max_length=32
-    )
+    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(..., max_length=32)
+    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(..., max_length=32)
     total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 

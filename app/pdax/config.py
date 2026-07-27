@@ -6,6 +6,7 @@ selected from `settings.pdax_environment` ("production" | "stage" | "uat").
 All endpoint paths are versioned under `/pdax-institution/v1` (a few under
 `/v2`); see app/pdax/client.py for how paths are joined.
 """
+
 from __future__ import annotations
 
 from ..config import settings
@@ -24,9 +25,7 @@ def base_url() -> str:
     """Resolve the PDAX base URL for the configured environment."""
     env = (settings.pdax_environment or DEFAULT_ENVIRONMENT).strip().lower()
     if env not in BASE_URLS:
-        raise RuntimeError(
-            f"unknown PDAX environment {env!r}; expected one of {list(BASE_URLS)}"
-        )
+        raise RuntimeError(f"unknown PDAX environment {env!r}; expected one of {list(BASE_URLS)}")
     return BASE_URLS[env]
 
 

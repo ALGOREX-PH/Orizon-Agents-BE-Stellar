@@ -82,9 +82,7 @@ async def execute_plan(
     )
     state.add_task(task)
 
-    _track_background_task(
-        asyncio.create_task(_run(plan, task_id, auth_id_hex=auth_id_hex, payer=payer))
-    )
+    _track_background_task(asyncio.create_task(_run(plan, task_id, auth_id_hex=auth_id_hex, payer=payer)))
     return task_id
 
 
@@ -118,8 +116,7 @@ async def _run(
                 task_id,
                 start,
                 "exec",
-                f"kit detected: {kit.kit_id} → {kit.brand.name} "
-                f"({len(kit.features)} features locked)",
+                f"kit detected: {kit.kit_id} → {kit.brand.name} ({len(kit.features)} features locked)",
             )
         await _emit(
             task_id,
@@ -206,8 +203,7 @@ async def _run(
                     task_id,
                     start,
                     "artifact",
-                    f"▣ {title} — {len(files)} file(s) · "
-                    f"{total_lines:,} lines · {total_bytes:,} bytes",
+                    f"▣ {title} — {len(files)} file(s) · {total_lines:,} lines · {total_bytes:,} bytes",
                 )
 
             # Persist this step's output under the agent name so later workers
@@ -220,9 +216,7 @@ async def _run(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
             if charge_tx and job_id:
-                await _submit_ratings(
-                    task_id, start, plan, context, payer=payer, job_id=job_id
-                )
+                await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
         else:
             sim_hash = "0x" + secrets.token_hex(16)
             await _emit(task_id, start, "proof", f"ERC-8004 attestation: {sim_hash} (simulated)")
@@ -230,8 +224,7 @@ async def _run(
                 task_id,
                 start,
                 "proof",
-                f"workflow sealed — {len(plan.plan.steps)} agents · {spent:.3f} USDC · "
-                f"{time.monotonic() - start:.2f}s",
+                f"workflow sealed — {len(plan.plan.steps)} agents · {spent:.3f} USDC · {time.monotonic() - start:.2f}s",
             )
 
         _finalize_task(task_id, "complete", spent, last_artifact, charge_tx, proof_tx)
@@ -366,9 +359,9 @@ async def _settle_onchain(
             sc.contract_ids().attestation_registry,
             "seal",
             [
-                sc.addr(settler),          # caller / sealer
+                sc.addr(settler),  # caller / sealer
                 sc.bytes16(job_id),
-                sc.addr(payer),            # orchestrator = the payer for now
+                sc.addr(payer),  # orchestrator = the payer for now
                 sc.bytes32(intent_hash),
                 agents_sym,
                 receipts_vec,
@@ -417,11 +410,7 @@ async def _submit_ratings(
     Best-effort by design: a failed rating never fails the workflow — each
     step logs its own trace line and the loop moves on.
     """
-    if not (
-        settings.reputation_enabled
-        and settings.stellar_reputation_ledger
-        and settings.stellar_signing_key
-    ):
+    if not (settings.reputation_enabled and settings.stellar_reputation_ledger and settings.stellar_signing_key):
         return
 
     from ..stellar import client as sc
@@ -431,9 +420,7 @@ async def _submit_ratings(
     # collide on sequence numbers (each tx consumes the account's next seq).
     for step in plan.plan.steps:
         # Context keys are worker names (e.g. "code.gen"), same as agent_name.
-        rating, weight = reputation_svc.synthetic_rating(
-            context.get(step.agent_name or ""), step.est_price_usdc
-        )
+        rating, weight = reputation_svc.synthetic_rating(context.get(step.agent_name or ""), step.est_price_usdc)
         try:
             result = await asyncio.to_thread(
                 sc.submit_rating,

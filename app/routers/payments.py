@@ -22,9 +22,7 @@ async def x402(
     """
     if not x_orizon_payment:
         response.status_code = 402
-        response.headers["X-Orizon-Payment-Required"] = (
-            f"amount={req.amount_usdc:.3f};agent={req.agent_id};token=USDC"
-        )
+        response.headers["X-Orizon-Payment-Required"] = f"amount={req.amount_usdc:.3f};agent={req.agent_id};token=USDC"
         return X402Response(status="402")
 
     return X402Response(status="paid", receipt="0x" + secrets.token_hex(10))

@@ -4,6 +4,7 @@ Case-insensitive substring match against each kit's `triggers`.
 Returns the matching `DemoKit` or `None`. First match wins, ordered by
 specificity (more specific tokens first to avoid false positives).
 """
+
 from __future__ import annotations
 
 from .kits import CALCULATOR_KIT, POMODORO_KIT, SNAKE_KIT, TETRIS_KIT

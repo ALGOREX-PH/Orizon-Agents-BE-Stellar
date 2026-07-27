@@ -12,6 +12,7 @@ them as `RampRecord`s:
 `handle_event` is the webhook entry point: it matches an inbound settlement
 event to a waiting ramp and advances it. The relevant Stellar asset is USDCXLM.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -53,8 +54,11 @@ async def estimate(
     workflow cost) → `php_amount` is the pesos needed."""
     if direction == "onramp":
         params = IndicativePriceV2Params(
-            side="buy", quote_currency=USDC, base_currency=PHP,
-            currency=currency or PHP, quantity=amount,
+            side="buy",
+            quote_currency=USDC,
+            base_currency=PHP,
+            currency=currency or PHP,
+            quantity=amount,
         )
         q = await trade.indicative_price_v2(client, params)
         return RampEstimate(
@@ -64,8 +68,11 @@ async def estimate(
             price=q.price,
         )
     params = IndicativePriceV2Params(
-        side="sell", quote_currency=USDC, base_currency=PHP,
-        currency=currency or USDC, quantity=amount,
+        side="sell",
+        quote_currency=USDC,
+        base_currency=PHP,
+        currency=currency or USDC,
+        quantity=amount,
     )
     q = await trade.indicative_price_v2(client, params)
     return RampEstimate(
@@ -84,9 +91,7 @@ async def funding_quote(client: PdaxClient, usdc_target: str) -> FundingQuote:
     per-trade minimum. Adds the safety buffer, rounds up, and floors at the PDAX
     fiat-deposit minimum, so the amount is always payable and always covers the
     workflow (any excess stays as USDC in the buyer's wallet)."""
-    ref = await estimate(
-        client, "onramp", settings.pdax_ramp_quote_reference_php, currency=PHP
-    )
+    ref = await estimate(client, "onramp", settings.pdax_ramp_quote_reference_php, currency=PHP)
     price = ref.price or 0.0
     buffer_bps = max(0, settings.pdax_ramp_buffer_bps)
     php_needed = float(usdc_target) * price
@@ -157,8 +162,11 @@ async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         quote = await trade.firm_quote_v2(
             client,
             FirmQuoteV2Request(
-                side="buy", quote_currency=USDC, base_currency=PHP,
-                currency=PHP, quantity=_num(record.php_amount),
+                side="buy",
+                quote_currency=USDC,
+                base_currency=PHP,
+                currency=PHP,
+                quantity=_num(record.php_amount),
             ),
         )
         order = await trade.place_order(
@@ -237,8 +245,11 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
             quote = await trade.firm_quote_v2(
                 client,
                 FirmQuoteV2Request(
-                    side="sell", quote_currency=USDC, base_currency=PHP,
-                    currency=USDC, quantity=_num(record.usdc_amount),
+                    side="sell",
+                    quote_currency=USDC,
+                    base_currency=PHP,
+                    currency=USDC,
+                    quantity=_num(record.usdc_amount),
                 ),
             )
             order = await trade.place_order(
@@ -328,19 +339,14 @@ async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
         if record.status != "awaiting_payment":
             return record
         if record.direction == "onramp" and record.identifier:
-            txns = await transactions.fiat_transactions(
-                client, identifier=record.identifier, mode="CashIn"
-            )
+            txns = await transactions.fiat_transactions(client, identifier=record.identifier, mode="CashIn")
             if any(str(t.status).upper() == "COMPLETED" for t in txns):
                 record.status = "funded"
                 return await advance_onramp(client, record)
         elif record.direction == "offramp" and record.deposit_address:
             txns = await transactions.crypto_transactions(client, type="crypto_in")
             for t in txns:
-                if (
-                    t.receiver_wallet_address == record.deposit_address
-                    and str(t.status).lower() == "completed"
-                ):
+                if t.receiver_wallet_address == record.deposit_address and str(t.status).lower() == "completed":
                     record.status = "funded"
                     return await advance_offramp(client, record)
         return record

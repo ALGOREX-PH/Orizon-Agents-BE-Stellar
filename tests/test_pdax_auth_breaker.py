@@ -1,6 +1,7 @@
 """PdaxAuth login circuit breaker: after 3 consecutive login failures the
 cached error is replayed without dialing PDAX until a 60s cooldown elapses;
 a success resets the counter."""
+
 from __future__ import annotations
 
 import asyncio

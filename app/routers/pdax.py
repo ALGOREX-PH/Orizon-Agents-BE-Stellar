@@ -8,6 +8,7 @@ mirror the PDAX domains: trade, funding, withdrawals, transactions, balances,
 and webhooks. PdaxError is translated to a curated HTTPException (stable
 snake_case codes, upstream detail logged server-side only — see _fail).
 """
+
 from __future__ import annotations
 
 import logging
@@ -494,11 +495,7 @@ def _mask_account_numbers(value: object) -> object:
     the ramp list is a bulk view and must not enumerate full bank accounts."""
     if isinstance(value, dict):
         return {
-            k: (
-                f"****{str(v)[-4:]}"
-                if "account_number" in k and v
-                else _mask_account_numbers(v)
-            )
+            k: (f"****{str(v)[-4:]}" if "account_number" in k and v else _mask_account_numbers(v))
             for k, v in value.items()
         }
     if isinstance(value, list):

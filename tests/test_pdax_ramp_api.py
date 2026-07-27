@@ -1,4 +1,5 @@
 """GET /api/pdax/ramp: pagination bounds and account-number masking."""
+
 from __future__ import annotations
 
 import pytest
@@ -19,11 +20,7 @@ def clean_ramp_state():
 
 
 def _save(i: int) -> None:
-    ramp_store.save(
-        RampRecord(
-            ramp_id=f"r{i}", direction="onramp", status="completed", created_at="t"
-        )
-    )
+    ramp_store.save(RampRecord(ramp_id=f"r{i}", direction="onramp", status="completed", created_at="t"))
 
 
 def test_ramp_list_paginates(client):

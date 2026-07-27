@@ -5,6 +5,7 @@ Crypto deposit returns a wallet address (+ tag/memo) for a currency such as
 USDCXLM. Fiat deposit carries full sender/beneficiary travel-rule data and
 returns a `payment_checkout_url` to complete the cash-in.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

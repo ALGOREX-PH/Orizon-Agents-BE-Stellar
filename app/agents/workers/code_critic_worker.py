@@ -9,6 +9,7 @@ non-negotiable requirements, and asks the critic to refine the HTML.
 If the critic regresses (more violations after vs. before), we fall back to
 the original draft so the user is never worse off.
 """
+
 from __future__ import annotations
 
 import logging
@@ -127,14 +128,11 @@ class CodeCriticWorker(Worker):
                 )
                 if kit_required:
                     critic_notes.append(
-                        f"applied {len(kit_required)} kit requirement"
-                        f"{'s' if len(kit_required) != 1 else ''}"
+                        f"applied {len(kit_required)} kit requirement{'s' if len(kit_required) != 1 else ''}"
                     )
                 final_artifact = revised
         except Exception as e:  # pragma: no cover — never fail the workflow
-            logger.warning(
-                "code.critic refine failed, keeping draft artifact: %s", e, exc_info=True
-            )
+            logger.warning("code.critic refine failed, keeping draft artifact: %s", e, exc_info=True)
             critic_notes.append(f"critic failed: {type(e).__name__}: {str(e)[:80]}")
 
         title = final_artifact.get("title", "artifact")

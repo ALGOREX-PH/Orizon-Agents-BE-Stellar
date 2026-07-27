@@ -36,11 +36,7 @@ class AppState:
     def add_task(self, task: Task) -> None:
         # appendleft on a full deque silently drops the rightmost (oldest)
         # id — capture it first so its task + trace entries go with it.
-        evicted = (
-            self.task_order[-1]
-            if len(self.task_order) == self.task_order.maxlen
-            else None
-        )
+        evicted = self.task_order[-1] if len(self.task_order) == self.task_order.maxlen else None
         self.tasks[task.id] = task
         self.task_order.appendleft(task.id)
         if evicted is not None and evicted != task.id:
@@ -48,11 +44,7 @@ class AppState:
             self.traces.pop(evicted, None)
 
     def add_plan(self, plan: StoredPlan) -> None:
-        evicted = (
-            self.plan_order[-1]
-            if len(self.plan_order) == self.plan_order.maxlen
-            else None
-        )
+        evicted = self.plan_order[-1] if len(self.plan_order) == self.plan_order.maxlen else None
         self.plans[plan.id] = plan
         self.plan_order.appendleft(plan.id)
         if evicted is not None and evicted != plan.id:

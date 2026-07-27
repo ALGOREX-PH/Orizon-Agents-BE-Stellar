@@ -16,6 +16,7 @@ Output dict shape (consumed by code.gen and emitted in the trace):
         "counts": { "tokens": int },
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -114,8 +115,15 @@ class DesignTokens(Worker):
     @staticmethod
     def _css_vars(palette: dict[str, Any]) -> str:
         keys = [
-            "bg", "surface", "surface_2", "border", "text",
-            "muted", "primary", "accent", "danger",
+            "bg",
+            "surface",
+            "surface_2",
+            "border",
+            "text",
+            "muted",
+            "primary",
+            "accent",
+            "danger",
         ]
         body = "\n".join(f"  --{k.replace('_', '-')}: {palette[k]};" for k in keys)
         return ":root {\n" + body + "\n}"

@@ -1,5 +1,6 @@
 """Failure paths of the execution service: a workflow that raises or is
 cancelled must land in status="failed" and always close its trace stream."""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,5 +1,6 @@
 """The unified error envelope: every error body keeps the legacy "detail"
 key and adds an "error" object with code / message / request_id."""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient

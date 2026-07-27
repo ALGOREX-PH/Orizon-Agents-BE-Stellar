@@ -213,9 +213,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Same 422 body FastAPI emits by default, plus the "error" object."""
     return JSONResponse(
         status_code=422,
-        content=_error_envelope(
-            jsonable_encoder(exc.errors()), "validation_error", "request validation failed"
-        ),
+        content=_error_envelope(jsonable_encoder(exc.errors()), "validation_error", "request validation failed"),
     )
 
 

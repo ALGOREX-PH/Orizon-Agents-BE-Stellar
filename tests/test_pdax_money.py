@@ -1,5 +1,6 @@
 """Decimal money helpers: float noise must never leak into outbound PDAX
 amount strings."""
+
 from __future__ import annotations
 
 from decimal import Decimal

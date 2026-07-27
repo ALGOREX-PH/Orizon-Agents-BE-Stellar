@@ -4,6 +4,7 @@ PDAX accepted bank / e-wallet codes (case-sensitive).
 `beneficiary_bank_code` on a fiat withdrawal must be one of these codes. The
 map is name → code; BANK_CODES is the set of valid codes for validation.
 """
+
 from __future__ import annotations
 
 # Display name → PDAX bank code.

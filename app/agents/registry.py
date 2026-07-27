@@ -13,13 +13,13 @@ from .workers.sol_audit import SolAudit
 
 # Real Agno workers
 _REAL: list[Worker] = [
-    Copywrite(),         # agt_01h8 copywrite.v3
-    DesignTokens(),      # agt_02k2 design.figma — kit-aware tokens
-    SolAudit(),          # agt_04m1 sol-audit
-    SeoBrief(),          # agt_05x7 seo.brief — kit-aware brand block
-    DeployV0(),          # agt_08j2 deploy.v0 — seal + preview URL
-    ResearchPro(),       # agt_09l5 research.pro — kit-aware feature brief
-    CodeGen(),           # agt_11c0 code.gen — context-aware HTML draft
+    Copywrite(),  # agt_01h8 copywrite.v3
+    DesignTokens(),  # agt_02k2 design.figma — kit-aware tokens
+    SolAudit(),  # agt_04m1 sol-audit
+    SeoBrief(),  # agt_05x7 seo.brief — kit-aware brand block
+    DeployV0(),  # agt_08j2 deploy.v0 — seal + preview URL
+    ResearchPro(),  # agt_09l5 research.pro — kit-aware feature brief
+    CodeGen(),  # agt_11c0 code.gen — context-aware HTML draft
     CodeCriticWorker(),  # agt_12r0 code.critic — top-level polish step
 ]
 

@@ -7,6 +7,7 @@ check against `PDAX_WEBHOOK_SECRET`. With no secret configured it fails
 closed; local dev/smoke can opt out via PDAX_ALLOW_UNSIGNED_WEBHOOKS=true
 (leaving IP allow-listing as the trust boundary).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -24,12 +25,8 @@ from .models.webhooks import (
 )
 
 
-async def register_webhook(
-    client: PdaxClient, req: WebhookRegisterRequest
-) -> WebhookRegistration:
-    data = await client.request(
-        "POST", "pdax-institution/v1/config/webhook", json=req.model_dump()
-    )
+async def register_webhook(client: PdaxClient, req: WebhookRegisterRequest) -> WebhookRegistration:
+    data = await client.request("POST", "pdax-institution/v1/config/webhook", json=req.model_dump())
     return WebhookRegistration(**data["data"])
 
 

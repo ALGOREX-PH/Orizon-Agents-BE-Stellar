@@ -1,5 +1,6 @@
 """PDAX auth guard: money-moving routes need the API key, probes stay public,
 and x402 agent ids cannot smuggle CR/LF into response headers."""
+
 from __future__ import annotations
 
 WITHDRAW_BODY = {

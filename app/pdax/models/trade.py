@@ -5,6 +5,7 @@ Indicative prices are non-binding. Firm quotes carry a `quote_id` that expires
 in 15 seconds and can be accepted via POST /trade (an order). v2 price/quote add
 an explicit `currency` + `quantity` (receive-side) on top of v1's `base_quantity`.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

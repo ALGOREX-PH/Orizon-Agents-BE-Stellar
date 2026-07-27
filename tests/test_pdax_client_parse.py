@@ -1,5 +1,6 @@
 """PdaxClient._parse: error payloads become PdaxError with fields populated
 (read-only coverage — no network)."""
+
 from __future__ import annotations
 
 import httpx

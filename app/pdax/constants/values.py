@@ -4,6 +4,7 @@ PDAX enumerated accepted values (all case-sensitive).
 These back the validation on fiat deposit / withdrawal payloads. `source_of_funds`
 also accepts a free-text "Others: <text>" form, handled separately by callers.
 """
+
 from __future__ import annotations
 
 SOURCE_OF_FUNDS: frozenset[str] = frozenset(
@@ -50,9 +51,7 @@ FIAT_DEPOSIT_METHODS: dict[str, str] = {
     "ub_online_upay_cashin": "UnionBank",
 }
 
-FIAT_WITHDRAWAL_METHODS: frozenset[str] = frozenset(
-    {"PAY-TO-ACCOUNT-REAL-TIME", "PAY-TO-ACCOUNT-NON-REAL-TIME"}
-)
+FIAT_WITHDRAWAL_METHODS: frozenset[str] = frozenset({"PAY-TO-ACCOUNT-REAL-TIME", "PAY-TO-ACCOUNT-NON-REAL-TIME"})
 
 # Travel-rule threshold: amounts ≥ this (PHP) require extra sender KYC.
 TRAVEL_RULE_THRESHOLD_PHP = 50_000

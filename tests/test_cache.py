@@ -1,5 +1,6 @@
 """Unit tests for the Soroban read cache (TTL, sweep, shielded single-flight,
 negative caching)."""
+
 from __future__ import annotations
 
 import asyncio

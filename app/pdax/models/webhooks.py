@@ -5,6 +5,7 @@ POST /v1/config/webhook registers an endpoint for `event_type` ("crypto" or
 "fiat"). PDAX then POSTs CryptoEvent / FiatEvent payloads to that URL as
 transactions settle.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

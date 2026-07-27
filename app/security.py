@@ -11,6 +11,7 @@ Lightweight, dependency-free hardening primitives.
 - `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
   INFO access log per request (method, path, status, duration, id).
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -34,9 +35,7 @@ EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
 
 # Current request's id — set by RequestContextMiddleware, readable from any
 # code running in the request's task context (error handlers, log records).
-request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "request_id", default="-"
-)
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
 
 
 class RequestIdLogFilter(logging.Filter):
@@ -75,9 +74,7 @@ async def require_api_key(
     # Compare utf-8 bytes, not str: compare_digest raises TypeError on
     # non-ASCII str input (Starlette decodes headers latin-1), which would
     # turn a bad key into a 500 instead of a 401.
-    if x_api_key is None or not secrets.compare_digest(
-        x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")
-    ):
+    if x_api_key is None or not secrets.compare_digest(x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
@@ -100,9 +97,7 @@ class RequestContextMiddleware:
             return
 
         headers = dict(scope.get("headers") or [])
-        request_id = (
-            (headers.get(b"x-request-id") or b"").decode("latin-1").strip()[:64]
-        )
+        request_id = (headers.get(b"x-request-id") or b"").decode("latin-1").strip()[:64]
         if not request_id:
             request_id = uuid.uuid4().hex[:16]
 

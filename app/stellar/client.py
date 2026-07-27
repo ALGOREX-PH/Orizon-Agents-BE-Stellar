@@ -12,6 +12,7 @@ two helpers:
 
 All amounts are i128 with Stellar's 7-decimal convention (0.012 USDC → 120000).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -185,15 +186,11 @@ def _signer_keypair() -> Keypair:
         try:
             return Keypair.from_mnemonic_phrase(" ".join(words))
         except Exception as e:
-            raise RuntimeError(
-                f"STELLAR_SIGNING_KEY looks like a mnemonic but is invalid: {e}"
-            ) from e
+            raise RuntimeError(f"STELLAR_SIGNING_KEY looks like a mnemonic but is invalid: {e}") from e
     try:
         return Keypair.from_secret(secret)
     except Exception as e:
-        raise RuntimeError(
-            f"STELLAR_SIGNING_KEY must be an S… secret or a 12/24-word mnemonic ({e})"
-        ) from e
+        raise RuntimeError(f"STELLAR_SIGNING_KEY must be an S… secret or a 12/24-word mnemonic ({e})") from e
 
 
 def signer_public_key() -> str:
@@ -378,17 +375,11 @@ def _send_signed_xdr(signed_xdr: str) -> str:
         env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
     except Exception as e:
         logger.warning("[stellar.submit] bad XDR: %s", e)
-        raise RuntimeError(
-            f"bad signed XDR (likely wrong networkPassphrase or malformed): {e}"
-        ) from e
+        raise RuntimeError(f"bad signed XDR (likely wrong networkPassphrase or malformed): {e}") from e
 
     sent = server.send_transaction(env)
     if sent.status != SendTransactionStatus.PENDING:
-        detail = (
-            f"status={sent.status} "
-            f"error={getattr(sent, 'error_result_xdr', None)} "
-            f"hash={sent.hash}"
-        )
+        detail = f"status={sent.status} error={getattr(sent, 'error_result_xdr', None)} hash={sent.hash}"
         logger.error("[stellar.submit] send failed: %s", detail)
         raise RuntimeError(f"submit failed ({detail})")
     return sent.hash
@@ -433,7 +424,7 @@ def _extract_diagnostics(status: Any) -> str:
     try:
         from stellar_sdk import xdr as _xdr
 
-        for ev_xdr in (getattr(status, "diagnostic_events_xdr", None) or []):
+        for ev_xdr in getattr(status, "diagnostic_events_xdr", None) or []:
             try:
                 ev = _xdr.DiagnosticEvent.from_xdr(ev_xdr)
                 # Re-stringify the interesting parts without crashing on exotic shapes.

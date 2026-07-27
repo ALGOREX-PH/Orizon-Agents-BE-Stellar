@@ -10,6 +10,7 @@ Usage:
     cd ~/Websites-Services-2026/orizon-agents-BE-Stellar
     .venv/bin/python scripts/register_batch_agent.py
 """
+
 from __future__ import annotations
 
 import sys

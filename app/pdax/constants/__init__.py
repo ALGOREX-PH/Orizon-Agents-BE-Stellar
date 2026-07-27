@@ -1,4 +1,5 @@
 """PDAX accepted-value reference tables (countries, banks, tokens, enums)."""
+
 from __future__ import annotations
 
 from .banks import BANK_CODES, BANK_NAME_TO_CODE, is_valid_bank_code

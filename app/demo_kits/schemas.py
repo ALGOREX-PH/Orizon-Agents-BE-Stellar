@@ -4,6 +4,7 @@ A DemoKit is a hand-tuned specification that short-circuits the orchestrator
 LLM for high-signal demo prompts (tetris, calculator, snake, pomodoro). It
 feeds a deterministic 6-step plan with a guaranteed-quality artifact.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -67,8 +68,8 @@ class PaletteSpec(BaseModel):
 
 
 class TypographySpec(BaseModel):
-    family_ui: str         # e.g. "Inter, system-ui, sans-serif"
-    family_display: str    # e.g. "JetBrains Mono, ui-monospace, monospace"
+    family_ui: str  # e.g. "Inter, system-ui, sans-serif"
+    family_display: str  # e.g. "JetBrains Mono, ui-monospace, monospace"
     base_size_px: int = 16
     scale: float = 1.25
 
@@ -109,9 +110,7 @@ class DemoKit(BaseModel):
         return {
             "title": self.brand.name,
             "summary": self.brand.tagline,
-            "files": [
-                {"path": "index.html", "language": "html", "content": html}
-            ],
+            "files": [{"path": "index.html", "language": "html", "content": html}],
             "entry": "index.html",
             "preview_html": html,
             "source": "baked",

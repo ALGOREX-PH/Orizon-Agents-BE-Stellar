@@ -9,6 +9,7 @@ concurrent callers from stampeding the auth endpoints, and a login circuit
 breaker fails fast after repeated failures so the real account is never
 hammered into an AccountLocked state.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -139,13 +140,9 @@ async def _put(http: httpx.AsyncClient, path: str, body: dict[str, Any]) -> dict
     return await _send(http, "PUT", path, body)
 
 
-async def _send(
-    http: httpx.AsyncClient, method: str, path: str, body: dict[str, Any]
-) -> dict[str, Any]:
+async def _send(http: httpx.AsyncClient, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     try:
-        resp = await http.request(
-            method, path, json=body, headers={"Content-Type": "application/json"}
-        )
+        resp = await http.request(method, path, json=body, headers={"Content-Type": "application/json"})
     except httpx.HTTPError as e:  # network/transport failure
         raise PdaxError(f"PDAX auth transport error: {e}") from e
     data = resp.json() if resp.content else {}

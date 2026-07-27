@@ -1,5 +1,6 @@
 """PDAX webhook receiver: signature verification edge cases, the HMAC accept
 path, and claim_event idempotency."""
+
 from __future__ import annotations
 
 import hashlib
@@ -65,14 +66,10 @@ def test_allow_unsigned_webhooks_reads_settings_not_env(monkeypatch):
     from app.pdax import config as pdax_config
 
     monkeypatch.setenv("PDAX_ALLOW_UNSIGNED_WEBHOOKS", "true")
-    monkeypatch.setattr(
-        pdax_config, "settings", SimpleNamespace(pdax_allow_unsigned_webhooks=False)
-    )
+    monkeypatch.setattr(pdax_config, "settings", SimpleNamespace(pdax_allow_unsigned_webhooks=False))
     assert pdax_config.allow_unsigned_webhooks() is False
 
-    monkeypatch.setattr(
-        pdax_config, "settings", SimpleNamespace(pdax_allow_unsigned_webhooks=True)
-    )
+    monkeypatch.setattr(pdax_config, "settings", SimpleNamespace(pdax_allow_unsigned_webhooks=True))
     assert pdax_config.allow_unsigned_webhooks() is True
 
 

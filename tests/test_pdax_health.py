@@ -1,5 +1,6 @@
 """PDAX health routes: the public probe is non-actuating (settings only);
 the real handshake probe lives on the API-key-guarded /health/deep route."""
+
 from __future__ import annotations
 
 from app.config import settings

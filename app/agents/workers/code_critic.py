@@ -8,6 +8,7 @@ returns a revised, polished CodeArtifact.
 This is where the "agents hire agents" premise pays off: the draft was
 already senior-level; the critic pushes it to shipping-quality.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -91,15 +92,8 @@ class CodeCritic:
         draft_html: str,
         violations: list[str],
     ) -> dict[str, Any]:
-        viol_block = (
-            "\n".join(f"  - {v}" for v in violations) if violations else "  (none)"
-        )
-        prompt = (
-            f"INTENT: {intent}\n"
-            f"RATIONALE: {rationale}\n"
-            f"VIOLATIONS:\n{viol_block}\n\n"
-            f"DRAFT_HTML:\n{draft_html}"
-        )
+        viol_block = "\n".join(f"  - {v}" for v in violations) if violations else "  (none)"
+        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\nVIOLATIONS:\n{viol_block}\n\nDRAFT_HTML:\n{draft_html}"
         result = await self._agent.arun(prompt)
         out = coerce_artifact(result.content)
 

@@ -9,6 +9,7 @@ Usage:
     cd ~/Websites-2026/orizon-agents-FE-Stellar/backend
     python3 scripts/pdax_smoke.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -37,8 +38,12 @@ def main() -> None:
     # 3. model coercion (string quantity -> float)
     FirmQuoteRequest(quote_currency="USDC", side="sell", base_quantity="100")
     q = Quote(
-        quote_currency="USDC", base_currency="PHP", side="sell",
-        base_quantity="100", price=55, total_amount=5500,
+        quote_currency="USDC",
+        base_currency="PHP",
+        side="sell",
+        base_quantity="100",
+        price=55,
+        total_amount=5500,
     )
     assert isinstance(q.base_quantity, float) and q.total_amount == 5500
     print("model coercion: ok")

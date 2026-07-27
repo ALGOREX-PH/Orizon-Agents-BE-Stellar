@@ -1,5 +1,6 @@
 """RFC 6238 conformance for the stdlib TOTP generator (SHA-1 test vectors,
 Appendix B — secret is the ASCII seed "12345678901234567890")."""
+
 from __future__ import annotations
 
 import pytest

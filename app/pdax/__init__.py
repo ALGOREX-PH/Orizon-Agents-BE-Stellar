@@ -7,6 +7,7 @@ client (`PdaxClient`) with an auth-token manager, Pydantic models per domain,
 and domain modules (trade / funding / withdrawals / transactions / balances /
 webhooks). For Orizon the key asset is USDCXLM — USDC on Stellar.
 """
+
 from __future__ import annotations
 
 from . import (

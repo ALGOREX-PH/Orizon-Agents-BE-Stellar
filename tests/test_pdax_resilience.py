@@ -1,5 +1,6 @@
 """Transport resilience: retry only on transient failures, token-bucket
 rate limiting."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,9 +32,7 @@ def _no_sleep(monkeypatch) -> None:
     async def fake_sleep(_d: float) -> None:
         return None
 
-    monkeypatch.setattr(
-        resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock)
-    )
+    monkeypatch.setattr(resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock))
 
 
 def test_is_retryable_policy():
@@ -54,9 +53,7 @@ def test_no_retry_on_400(monkeypatch):
 
 def test_retries_then_succeeds_on_5xx(monkeypatch):
     _no_sleep(monkeypatch)
-    fn, calls = _fn(
-        [PdaxError("boom", http_status=503), PdaxError("boom", http_status=502), None]
-    )
+    fn, calls = _fn([PdaxError("boom", http_status=503), PdaxError("boom", http_status=502), None])
     result = asyncio.run(with_retries(fn, attempts=3))
     assert result == "ok@3"
     assert calls["n"] == 3
@@ -80,9 +77,7 @@ def test_token_bucket_burst_then_wait(monkeypatch):
         sleeps.append(d)
         now[0] += d
 
-    monkeypatch.setattr(
-        resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock)
-    )
+    monkeypatch.setattr(resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock))
     limiter = RateLimiter(2.0, 2)  # 2 tokens/sec, burst of 2
 
     async def run() -> None:
@@ -104,9 +99,7 @@ def test_token_bucket_refills_over_time(monkeypatch):
         sleeps.append(d)
         now[0] += d
 
-    monkeypatch.setattr(
-        resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock)
-    )
+    monkeypatch.setattr(resilience, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock))
     limiter = RateLimiter(2.0, 2)
 
     async def run() -> None:

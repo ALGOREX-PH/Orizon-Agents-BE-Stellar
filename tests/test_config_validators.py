@@ -1,6 +1,7 @@
 """Fail-fast Settings validators: half-flipped or unsafe configs must refuse
 to boot instead of running open. Constructed with _env_file=None so the local
 .env can never leak into assertions."""
+
 from __future__ import annotations
 
 import pytest
@@ -23,9 +24,7 @@ def test_defaults_are_safe_and_timeouts_declared():
 def test_mainnet_requires_mainnet_passphrase():
     with pytest.raises(ValidationError, match="STELLAR_NETWORK_PASSPHRASE"):
         _settings(stellar_network="mainnet")
-    s = _settings(
-        stellar_network="mainnet", stellar_network_passphrase=MAINNET_PASSPHRASE
-    )
+    s = _settings(stellar_network="mainnet", stellar_network_passphrase=MAINNET_PASSPHRASE)
     assert s.stellar_network == "mainnet"
 
 

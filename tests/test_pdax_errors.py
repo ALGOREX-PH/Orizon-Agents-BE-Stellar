@@ -1,5 +1,6 @@
 """Curated PDAX error envelope: clients get stable snake_case codes, never
 the raw upstream message; upstream 5xx/auth failures collapse to 502."""
+
 from __future__ import annotations
 
 import logging
@@ -53,9 +54,7 @@ def test_fail_collapses_5xx_and_transport_to_502():
 def test_fail_never_leaks_upstream_message(caplog):
     secret_message = "internal ledger id 12345 rejected by core"
     with caplog.at_level(logging.WARNING, logger="app.routers.pdax"):
-        exc = _fail(
-            PdaxError(secret_message, code="OT010006", http_status=400, request_id="rq-9")
-        )
+        exc = _fail(PdaxError(secret_message, code="OT010006", http_status=400, request_id="rq-9"))
     assert secret_message not in str(exc.detail)
     assert exc.detail == "insufficient_balance"
     # ...but the full upstream envelope IS logged for operators.

@@ -1,4 +1,5 @@
 """Decompose LLM budget: a hung orchestrator model maps to 504, not a hang."""
+
 from __future__ import annotations
 
 import asyncio

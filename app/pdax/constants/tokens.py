@@ -5,6 +5,7 @@ Use the Token Symbol exactly for crypto-in / crypto-out. Sending an asset over
 the wrong network can make recovery impossible. For Orizon the relevant symbol
 is USDCXLM (USDC on Stellar) — see STELLAR_TOKENS below.
 """
+
 from __future__ import annotations
 
 TOKEN_NETWORKS: dict[str, str] = {
