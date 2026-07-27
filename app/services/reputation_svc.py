@@ -219,6 +219,6 @@ async def fetch_reps(
             timeout=timeout_seconds,
         )
         return {info.agent_id: info for info in infos}
-    except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
+    except Exception as e:  # TimeoutError included: it subclasses Exception on 3.11+
         logger.debug("reputation batch read degraded to prior: %s", e)
         return {a: _prior_info(a) for a in agent_ids}
