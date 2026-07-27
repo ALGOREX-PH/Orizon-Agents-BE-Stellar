@@ -161,6 +161,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 # unauthenticated LLM routes from visitors' browsers.
 _CORS_ORIGIN_REGEX = re.compile(r"^https://orizon-agents-fe-stellar(-[a-z0-9-]+)?\.vercel\.app$")
 
+
+def _cors_allows(origin: str) -> bool:
+    """Mirror the CORS middleware's decision — the exact allow-list OR the
+    compiled origin regex — for handlers that must stamp CORS headers by
+    hand (the 500 handler runs outside the middleware stack)."""
+    return origin in settings.cors_origin_list or _CORS_ORIGIN_REGEX.fullmatch(origin) is not None
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -249,7 +257,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     if request_id != "-":
         headers["x-request-id"] = request_id
     origin = request.headers.get("origin")
-    if origin and origin in settings.cors_origin_list:
+    if origin and _cors_allows(origin):
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
     return JSONResponse(

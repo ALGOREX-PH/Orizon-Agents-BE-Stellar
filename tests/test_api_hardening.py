@@ -171,6 +171,27 @@ def test_security_headers_on_api_response(client):
     assert r.headers["x-frame-options"] == "DENY"
 
 
+def test_500_handler_allows_preview_origin():
+    from app.main import app
+
+    if not any(getattr(r, "path", None) == "/boom-cors-test" for r in app.routes):
+
+        @app.get("/boom-cors-test", include_in_schema=False)
+        async def boom() -> None:
+            raise RuntimeError("boom")
+
+    preview = "https://orizon-agents-fe-stellar-git-update-2-team.vercel.app"
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get("/boom-cors-test", headers={"Origin": preview})
+        assert r.status_code == 500
+        # The hand-rolled CORS in the 500 handler must apply the same regex
+        # as the middleware, or preview deployments can't read the envelope.
+        assert r.headers["access-control-allow-origin"] == preview
+        foreign = c.get("/boom-cors-test", headers={"Origin": "https://evil.vercel.app"})
+        assert foreign.status_code == 500
+        assert "access-control-allow-origin" not in foreign.headers
+
+
 def test_security_headers_on_429():
     from app.main import SecurityHeadersMiddleware
 
