@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Optional shared secret for the backend-signing routes. Empty (the
     # demo default) disables the check; set it to require X-API-Key.
     api_key: str = ""
+    # Capability-token authorization for task-scoped reads. OFF by default —
+    # the public demo stays fully open. When enabled, GET task/trace routes
+    # require the per-task read token minted at execute (or a valid API key).
+    task_auth_required: bool = False
     # Per-client-IP sliding-window request budget (in-process, per worker).
     rate_limit_per_minute: int = 120
     # Ceiling for a single PaymentEscrow.charge, in USDC.
