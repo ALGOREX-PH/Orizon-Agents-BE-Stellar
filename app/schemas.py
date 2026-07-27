@@ -130,6 +130,10 @@ class ExecuteRequest(BaseModel):
 
 class ExecuteResponse(BaseModel):
     task_id: str
+    # Capability token for reading this task (status/artifact/trace). Always
+    # returned so clients can store it before TASK_AUTH_REQUIRED is flipped
+    # on; harmless while enforcement is off.
+    read_token: str | None = None
 
 
 class X402Request(BaseModel):

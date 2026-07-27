@@ -32,4 +32,4 @@ async def orchestrator_execute(req: ExecuteRequest) -> ExecuteResponse:
     if plan is None:
         raise HTTPException(404, f"unknown plan_id: {req.plan_id}")
     task_id = await execute_plan(plan, auth_id_hex=req.auth_id_hex, payer=req.payer)
-    return ExecuteResponse(task_id=task_id)
+    return ExecuteResponse(task_id=task_id, read_token=state.task_tokens.get(task_id))
