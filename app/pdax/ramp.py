@@ -311,7 +311,9 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
             _PAYOUTS.pop(record.ramp_id, None)
 
 
-def _match(event: CryptoEvent | FiatEvent):
+def _match(
+    event: CryptoEvent | FiatEvent,
+) -> tuple[RampRecord | None, Callable[[PdaxClient, RampRecord], Awaitable[RampRecord]] | None]:
     """Find the ramp + advance function a settlement event belongs to."""
     if isinstance(event, FiatEvent):
         if "DEPOSIT" not in event.transaction_type.upper():
