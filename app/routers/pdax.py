@@ -373,15 +373,23 @@ async def webhook_receive(request: Request) -> dict:
     except Exception as e:
         raise HTTPException(400, detail="invalid webhook payload") from e
     # Idempotency — a retried delivery must not advance a ramp twice.
-    if not pw.claim_event(pw.event_key(payload)):
+    key = pw.event_key(payload)
+    if not pw.claim_event(key):
         return {"received": True, "duplicate": True}
-    event = pw.parse_event(payload)
-    # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
-    # crypto deposit → sell → fiat withdraw).
+    # The claim is only kept once the event fully took effect: if parsing or
+    # handling fails here, PDAX's retry must be processed, not answered with
+    # {"duplicate": true} — that would silently drop the event forever.
     try:
+        event = pw.parse_event(payload)
+        # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
+        # crypto deposit → sell → fiat withdraw).
         advanced = await pr.handle_event(get_pdax_client(), event)
     except PdaxError as e:
+        pw.release_event(key)
         raise _fail(e) from e
+    except BaseException:
+        pw.release_event(key)
+        raise
     return {
         "received": True,
         "event": event.model_dump(),
