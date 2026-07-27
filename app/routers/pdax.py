@@ -479,10 +479,38 @@ async def ramp_offramp(req: OffRampRequest) -> dict:
     return record.model_dump()
 
 
+def _mask_account_numbers(value: object) -> object:
+    """Recursively mask any *account_number* field to its last 4 characters —
+    the ramp list is a bulk view and must not enumerate full bank accounts."""
+    if isinstance(value, dict):
+        return {
+            k: (
+                f"****{str(v)[-4:]}"
+                if "account_number" in k and v
+                else _mask_account_numbers(v)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_account_numbers(v) for v in value]
+    return value
+
+
 @secured.get("/ramp")
-async def ramp_list() -> dict:
-    """All ramps tracked this process lifetime."""
-    return {"ramps": [r.model_dump() for r in pr.ramp_store.list_all()]}
+async def ramp_list(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Ramps tracked this process lifetime (insertion order), paginated.
+    Account numbers are masked to their last 4 digits in this bulk view."""
+    records = pr.ramp_store.list_all()
+    page = records[offset : offset + limit]
+    return {
+        "ramps": [_mask_account_numbers(r.model_dump()) for r in page],
+        "total": len(records),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @secured.get("/ramp/{ramp_id}")
