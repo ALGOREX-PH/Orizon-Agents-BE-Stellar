@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 _store: dict[str, tuple[float, Any]] = {}
 

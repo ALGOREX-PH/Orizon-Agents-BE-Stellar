@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from typing import Deque
 
 from .schemas import Agent, StoredPlan, Task, TraceLine
 
@@ -22,10 +21,10 @@ class AppState:
     def __init__(self) -> None:
         self.agents: dict[str, Agent] = {}
         self.tasks: dict[str, Task] = {}
-        self.task_order: Deque[str] = deque(maxlen=200)
+        self.task_order: deque[str] = deque(maxlen=200)
         self.traces: dict[str, list[TraceLine]] = {}
         self.plans: dict[str, StoredPlan] = {}
-        self.plan_order: Deque[str] = deque(maxlen=200)
+        self.plan_order: deque[str] = deque(maxlen=200)
         self.started_at: float = time.time()
 
     def add_agent(self, agent: Agent) -> None:
