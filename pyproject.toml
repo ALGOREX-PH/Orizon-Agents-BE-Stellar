@@ -7,6 +7,8 @@ line-length = 120
 python_version = "3.12"
 files = ["app"]
 check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 # agno and stellar-sdk ship without stubs; don't let that block adoption.
