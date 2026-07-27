@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
@@ -32,7 +32,7 @@ class SolAudit(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="sol-audit",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=build_openai_chat(settings.worker_model),
             instructions=(
                 "You are a smart contract security auditor. Given an intent or contract "
                 "description, return up to 6 findings (severity, title, rationale) and a "

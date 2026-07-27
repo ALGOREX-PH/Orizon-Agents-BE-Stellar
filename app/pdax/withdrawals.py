@@ -6,6 +6,7 @@ PDAX withdrawal endpoints — fiat withdraw, user-info upload, and crypto out.
 (a FAILED business result is returned, not raised). `crypto_out` returns a
 flat payload.
 """
+
 from __future__ import annotations
 
 from . import validation
@@ -20,9 +21,7 @@ from .models.withdrawals import (
 
 async def fiat_withdraw(client: PdaxClient, req: FiatWithdrawRequest) -> FiatWithdrawResult:
     validation.validate_fiat_withdraw(req)
-    data = await client.request(
-        "POST", "pdax-institution/v1/fiat/withdraw", json=req.model_dump(exclude_none=True)
-    )
+    data = await client.request("POST", "pdax-institution/v1/fiat/withdraw", json=req.model_dump(exclude_none=True))
     return FiatWithdrawResult(**(data.get("data", data)))
 
 
@@ -36,8 +35,6 @@ async def user_info_upload(client: PdaxClient, req: FiatWithdrawRequest) -> Fiat
 
 
 async def crypto_out(client: PdaxClient, req: CryptoOutRequest) -> CryptoOutResult:
-    data = await client.request(
-        "POST", "pdax-institution/v1/crypto/withdraw", json=req.model_dump(exclude_none=True)
-    )
+    data = await client.request("POST", "pdax-institution/v1/crypto/withdraw", json=req.model_dump(exclude_none=True))
     # Crypto out returns a flat payload (no envelope).
     return CryptoOutResult(**(data.get("data", data)))

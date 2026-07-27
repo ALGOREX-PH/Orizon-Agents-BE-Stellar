@@ -1,7 +1,16 @@
-# Lint configuration only — packaging stays requirements.txt-based and pytest
-# keeps its config in pytest.ini.
+# Lint/type-check configuration only — packaging stays requirements.txt-based
+# and pytest keeps its config in pytest.ini.
 [tool.ruff]
 line-length = 120
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# agno and stellar-sdk ship without stubs; don't let that block adoption.
+ignore_missing_imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

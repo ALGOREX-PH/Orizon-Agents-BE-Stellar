@@ -1,5 +1,6 @@
 """PDAX auth guard: money-moving routes need the API key, probes stay public,
 and x402 agent ids cannot smuggle CR/LF into response headers."""
+
 from __future__ import annotations
 
 WITHDRAW_BODY = {
@@ -21,9 +22,15 @@ WITHDRAW_BODY = {
 }
 
 
-class _FakeResult:
-    def model_dump(self) -> dict:
-        return {"identifier": "test-wd-1", "status": "PENDING"}
+def _fake_result():
+    from app.pdax.models.withdrawals import FiatWithdrawResult
+
+    return FiatWithdrawResult(
+        identifier="test-wd-1",
+        amount=100.0,
+        method="PAY-TO-ACCOUNT-NON-REAL-TIME",
+        status="PENDING",
+    )
 
 
 def test_fiat_withdraw_rejected_without_api_key(client, hermetic_settings):
@@ -36,7 +43,7 @@ def test_fiat_withdraw_passes_guard_with_api_key(client, hermetic_settings, monk
     hermetic_settings.api_key = "secret-key"
 
     async def fake_fiat_withdraw(client_, req):
-        return _FakeResult()
+        return _fake_result()
 
     monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
     monkeypatch.setattr("app.pdax.withdrawals.fiat_withdraw", fake_fiat_withdraw)
@@ -53,8 +60,8 @@ def test_fiat_withdraw_passes_guard_with_api_key(client, hermetic_settings, monk
 
 def test_pdax_health_needs_no_api_key(client, hermetic_settings, monkeypatch):
     hermetic_settings.api_key = "secret-key"
-    # Blank the PDAX credentials so the probe reports unconfigured instead of
-    # dialing the live sandbox.
+    # Blank the PDAX credentials — the public probe reads settings only and
+    # must report configured=False without dialing anything.
     from app.config import settings
 
     monkeypatch.setattr(settings, "pdax_username", "")
@@ -62,7 +69,9 @@ def test_pdax_health_needs_no_api_key(client, hermetic_settings, monkeypatch):
 
     r = client.get("/api/pdax/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "unconfigured"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["configured"] is False
 
 
 def test_x402_rejects_crlf_agent_id(client):

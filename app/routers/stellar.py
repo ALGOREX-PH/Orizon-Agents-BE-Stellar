@@ -6,6 +6,7 @@ Write routes have two shapes:
   - build-*   → returns unsigned XDR for Freighter to sign
   - submit    → takes Freighter-signed XDR and broadcasts it
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stellar", tags=["stellar"])
 
+
 # ── response models (shapes match the existing payloads exactly) ──
 class NetworkInfo(BaseModel):
     network: str
@@ -47,12 +49,12 @@ class ReputationInfo(BaseModel):
     """Smoothed reputation for one agent (mirror of reputation_svc.RepInfo)."""
 
     agent_id: str
-    smoothed_bps: int      # prior-smoothed mean, 0..10_000
-    lower_bound_bps: int   # conservative bound used for the routing floor
-    avg_bps: int           # unsmoothed decayed on-chain mean (0 = no evidence)
-    count: int             # lifetime rating count
-    weight: int            # decayed evidence mass, stroops
-    disputed: int          # lifetime dispute count
+    smoothed_bps: int  # prior-smoothed mean, 0..10_000
+    lower_bound_bps: int  # conservative bound used for the routing floor
+    avg_bps: int  # unsmoothed decayed on-chain mean (0 = no evidence)
+    count: int  # lifetime rating count
+    weight: int  # decayed evidence mass, stroops
+    disputed: int  # lifetime dispute count
     dispute_rate_bps: int  # disputed / count, in bps
     source: Literal["onchain", "prior"]
 
@@ -70,16 +72,16 @@ class ReputationParams(BaseModel):
     by the backend plus the deployed ledger's on-chain decay constants."""
 
     enabled: bool
-    prior_bps: int                  # Bayesian prior mean, bps of the 0-100 scale
-    prior_weight_usdc: float        # evidence mass of the prior, USDC
-    floor_bps: int                  # routing floor on the Wilson lower bound
-    max_rating_weight_usdc: float   # per-rating weight cap
-    read_ttl_seconds: float         # cache TTL for on-chain rep_state reads
-    wilson_z: float                 # z of the one-sided lower confidence bound
-    epoch_seconds: int              # on-chain decay epoch length
-    decay_bps_per_epoch: int        # evidence retained per epoch, bps
-    max_decay_epochs: int           # full-forget horizon
-    contract_id: str                # deployed ReputationLedger id ("" if unset)
+    prior_bps: int  # Bayesian prior mean, bps of the 0-100 scale
+    prior_weight_usdc: float  # evidence mass of the prior, USDC
+    floor_bps: int  # routing floor on the Wilson lower bound
+    max_rating_weight_usdc: float  # per-rating weight cap
+    read_ttl_seconds: float  # cache TTL for on-chain rep_state reads
+    wilson_z: float  # z of the one-sided lower confidence bound
+    epoch_seconds: int  # on-chain decay epoch length
+    decay_bps_per_epoch: int  # evidence retained per epoch, bps
+    max_decay_epochs: int  # full-forget horizon
+    contract_id: str  # deployed ReputationLedger id ("" if unset)
     network: str
 
 
@@ -109,20 +111,20 @@ READ_TTL_SECONDS = 3.0
 @router.get("/network", response_model=NetworkInfo)
 async def network() -> NetworkInfo:
     ids = sc.contract_ids()
-    return {
-        "network": settings.stellar_network,
-        "rpc_url": settings.stellar_rpc_url,
-        "network_passphrase": sc.network_passphrase(),
-        "admin": settings.stellar_admin_address,
-        "asset": "native",
-        "asset_sac": ids.asset_sac,
-        "contracts": {
+    return NetworkInfo(
+        network=settings.stellar_network,
+        rpc_url=settings.stellar_rpc_url,
+        network_passphrase=sc.network_passphrase(),
+        admin=settings.stellar_admin_address,
+        asset="native",
+        asset_sac=ids.asset_sac,
+        contracts={
             "agent_registry": ids.agent_registry,
             "reputation_ledger": ids.reputation_ledger,
             "payment_escrow": ids.payment_escrow,
             "attestation_registry": ids.attestation_registry,
         },
-    }
+    )
 
 
 # Agent ids are contract Symbols: short alphanumeric/underscore tokens. Reject
@@ -135,6 +137,7 @@ AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
 async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> AgentRead:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
+
         async def _fetch():
             return await asyncio.to_thread(
                 sc.simulate_read,
@@ -144,7 +147,7 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
             )
 
         result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
-        return {"agent": result}
+        return AgentRead(agent=result)
     except Exception as e:
         # Routine outcome for unknown ids (the simulate errors) — not a stack
         # trace event. Genuinely unexpected failures still surface via the 404
@@ -160,11 +163,11 @@ async def read_reputations() -> ReputationBatch:
     the chain unreachable) come back as the prior, marked source="prior".
     """
     infos = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
-    return {
-        "reputations": {aid: info.model_dump() for aid, info in infos.items()},
-        "floor_bps": settings.reputation_floor_bps,
-        "prior_bps": settings.reputation_prior_bps,
-    }
+    return ReputationBatch(
+        reputations={aid: ReputationInfo(**info.model_dump()) for aid, info in infos.items()},
+        floor_bps=settings.reputation_floor_bps,
+        prior_bps=settings.reputation_prior_bps,
+    )
 
 
 # Declared BEFORE the dynamic /reputation/{agent_id} route — FastAPI matches
@@ -173,20 +176,20 @@ async def read_reputations() -> ReputationBatch:
 @router.get("/reputation/params", response_model=ReputationParams)
 async def reputation_params() -> ReputationParams:
     """The reputation system's parameter set — pure config, no RPC call."""
-    return {
-        "enabled": settings.reputation_enabled,
-        "prior_bps": settings.reputation_prior_bps,
-        "prior_weight_usdc": settings.reputation_prior_weight_usdc,
-        "floor_bps": settings.reputation_floor_bps,
-        "max_rating_weight_usdc": settings.reputation_max_rating_weight_usdc,
-        "read_ttl_seconds": settings.reputation_read_ttl_seconds,
-        "wilson_z": reputation_svc.WILSON_Z,
-        "epoch_seconds": reputation_svc.EPOCH_SECONDS,
-        "decay_bps_per_epoch": reputation_svc.DECAY_BPS_PER_EPOCH,
-        "max_decay_epochs": reputation_svc.MAX_DECAY_EPOCHS,
-        "contract_id": settings.stellar_reputation_ledger,
-        "network": settings.stellar_network,
-    }
+    return ReputationParams(
+        enabled=settings.reputation_enabled,
+        prior_bps=settings.reputation_prior_bps,
+        prior_weight_usdc=settings.reputation_prior_weight_usdc,
+        floor_bps=settings.reputation_floor_bps,
+        max_rating_weight_usdc=settings.reputation_max_rating_weight_usdc,
+        read_ttl_seconds=settings.reputation_read_ttl_seconds,
+        wilson_z=reputation_svc.WILSON_Z,
+        epoch_seconds=reputation_svc.EPOCH_SECONDS,
+        decay_bps_per_epoch=reputation_svc.DECAY_BPS_PER_EPOCH,
+        max_decay_epochs=reputation_svc.MAX_DECAY_EPOCHS,
+        contract_id=settings.stellar_reputation_ledger,
+        network=settings.stellar_network,
+    )
 
 
 @router.get("/reputation/{agent_id}", response_model=ReputationInfo)
@@ -197,7 +200,7 @@ async def read_reputation(
     read with Bayesian prior smoothing; prior fallback on any failure.
     """
     info = await reputation_svc.fetch_rep(agent_id)
-    return info.model_dump()
+    return ReputationInfo(**info.model_dump())
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
@@ -216,10 +219,8 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
                 [sc.bytes16(jid)],
             )
 
-        result = await rcache.get_or_set(
-            f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch
-        )
-        return {"attestation": result}
+        result = await rcache.get_or_set(f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch)
+        return AttestationRead(attestation=result)
     except Exception as e:
         logger.exception("attestation read failed for %s", job_id_hex)
         raise HTTPException(400, "attestation_read_failed") from e
@@ -227,14 +228,10 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
 
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
-    owner: str = Field(
-        ..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner"
-    )
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner")
     agent_id: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
-        default_factory=list, max_length=16
-    )
+    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(default_factory=list, max_length=16)
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
@@ -243,6 +240,7 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
     try:
         from stellar_sdk import scval as _sv
+
         args = [
             sc.addr(req.owner),
             sc.sym(req.agent_id),
@@ -257,7 +255,7 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
             args,
             source=req.owner,
         )
-        return {"xdr": xdr}
+        return XdrResponse(xdr=xdr)
     except Exception as e:
         logger.exception("register-agent build failed")
         raise HTTPException(400, "build_failed") from e
@@ -288,7 +286,7 @@ async def build_authorize(req: AuthorizeReq) -> AuthorizeXdrResponse:
             args,
             source=req.payer,
         )
-        return {"xdr": xdr, "expires_at": expires_at}
+        return AuthorizeXdrResponse(xdr=xdr, expires_at=expires_at)
     except Exception as e:
         logger.exception("authorize build failed")
         raise HTTPException(400, "build_failed") from e
@@ -304,7 +302,7 @@ class SubmitReq(BaseModel):
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
     try:
-        result = await asyncio.to_thread(sc.submit_signed_xdr, req.signed_xdr)
+        result = await sc.submit_signed_xdr_async(req.signed_xdr)
     except Exception as e:
         logger.exception("signed xdr submit failed")
         raise HTTPException(400, "submit_failed") from e
@@ -340,8 +338,7 @@ async def server_charge(req: ChargeReq) -> dict:
             sc.i128(sc.usdc_to_i128(req.amount_usdc)),
             sc.bytes16(jid),
         ]
-        return await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        return await sc.invoke_with_server_key_async(
             sc.contract_ids().payment_escrow,
             "charge",
             args,
@@ -353,16 +350,10 @@ async def server_charge(req: ChargeReq) -> dict:
 
 class SealReq(BaseModel):
     job_id_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{32}$")
-    orchestrator: str = Field(
-        ..., pattern=r"^G[A-Z2-7]{55}$"
-    )  # G-address of the workflow owner
+    orchestrator: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")  # G-address of the workflow owner
     intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
-    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
-        ..., max_length=32
-    )
-    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(
-        ..., max_length=32
-    )
+    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(..., max_length=32)
+    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(..., max_length=32)
     total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 
@@ -396,8 +387,7 @@ async def server_seal(req: SealReq) -> dict:
             _sv.to_vec(receipts),
             sc.i128(sc.usdc_to_i128(req.total_spent_usdc)),
         ]
-        return await asyncio.to_thread(
-            sc.invoke_with_server_key,
+        return await sc.invoke_with_server_key_async(
             sc.contract_ids().attestation_registry,
             "seal",
             args,
@@ -411,4 +401,4 @@ async def server_seal(req: SealReq) -> dict:
 @router.get("/new-id", response_model=NewIdResponse)
 async def new_id() -> NewIdResponse:
     """Produce a random 16-byte id (hex) — useful for job_id / auth_id."""
-    return {"id_hex": secrets.token_hex(16)}
+    return NewIdResponse(id_hex=secrets.token_hex(16))

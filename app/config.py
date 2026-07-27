@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     orchestrator_model: str = "gpt-4o-mini"
     worker_model: str = "gpt-4o-mini"
+    # Per-request HTTP timeout handed to the OpenAI client (its own default
+    # is 600 s per attempt — far too long for an interactive API).
+    llm_timeout_seconds: float = 120.0
+    # End-to-end budget for one decompose LLM call (asyncio.wait_for bound;
+    # the router maps a breach to HTTP 504 "decompose_timeout").
+    decompose_timeout_seconds: float = 90.0
 
     # ── Code-generation quality dials (code.gen + code.critic) ─
     # Higher reasoning = better artifacts, more latency + cost.
@@ -74,6 +80,10 @@ class Settings(BaseSettings):
     pdax_password: str = ""  # inject via host secrets in prod
     pdax_otp_secret: str = ""  # TOTP seed if MFA is enabled (optional)
     pdax_webhook_secret: str = ""  # shared secret for webhook validation
+    # Escape hatch for local dev/smoke: accept inbound webhooks without a
+    # signature when the secret is unset. Fails closed by default and is
+    # rejected outright in production (see validator below).
+    pdax_allow_unsigned_webhooks: bool = False
     # Resilience tunables (transport retry + client-side rate limiting).
     pdax_max_retries: int = 3
     pdax_rate_limit_per_sec: float = 8.0
@@ -105,6 +115,31 @@ class Settings(BaseSettings):
                 f"({MAINNET_PASSPHRASE!r}). Set STELLAR_NETWORK_PASSPHRASE "
                 "to match, or switch STELLAR_NETWORK back to testnet."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _production_webhooks_require_signature(self) -> "Settings":
+        """Fail fast when production PDAX would accept unsigned webhooks.
+
+        The webhook route verifies signatures with pdax_webhook_secret and
+        only skips verification via the pdax_allow_unsigned_webhooks escape
+        hatch. Both an enabled escape hatch and a missing secret would let
+        anyone forge deposit/withdrawal callbacks in production, so refuse
+        to start rather than run open.
+        """
+        if self.pdax_environment.strip().lower() == "production":
+            if self.pdax_allow_unsigned_webhooks:
+                raise ValueError(
+                    "PDAX_ALLOW_UNSIGNED_WEBHOOKS must not be enabled when "
+                    "PDAX_ENVIRONMENT is production. Unset it and configure "
+                    "PDAX_WEBHOOK_SECRET instead."
+                )
+            if not self.pdax_webhook_secret:
+                raise ValueError(
+                    "PDAX_WEBHOOK_SECRET is required when PDAX_ENVIRONMENT "
+                    "is production — without it inbound webhooks cannot be "
+                    "verified. Set the shared secret from the PDAX console."
+                )
         return self
 
     @property

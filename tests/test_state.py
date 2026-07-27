@@ -1,5 +1,6 @@
 """Bounded retention in AppState — tasks, traces, and plans must not grow
 without bound on a long-lived single-worker process."""
+
 from __future__ import annotations
 
 from app.schemas import Plan, StoredPlan, Task, TraceLine

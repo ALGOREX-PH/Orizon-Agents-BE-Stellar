@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 
 from ..config import settings
 from ..schemas import Plan
+from .model_factory import build_openai_chat
 
 INSTRUCTIONS = """You are Orizon Orchestrator — the brain that turns user intent into executable agent plans.
 
@@ -35,7 +35,7 @@ Return ONLY the structured Plan. No commentary.
 def _build() -> Agent:
     return Agent(
         name="orizon_orchestrator",
-        model=OpenAIChat(id=settings.orchestrator_model, api_key=settings.openai_api_key),
+        model=build_openai_chat(settings.orchestrator_model),
         instructions=INSTRUCTIONS,
         output_schema=Plan,
     )

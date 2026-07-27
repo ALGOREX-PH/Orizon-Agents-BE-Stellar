@@ -5,11 +5,13 @@ to the frontend.
 Auth is handled server-side: the backend logs into PDAX with its own
 credentials and caches tokens, so the frontend never sees them. Endpoints
 mirror the PDAX domains: trade, funding, withdrawals, transactions, balances,
-and webhooks. PdaxError is translated to an HTTPException preserving the
-upstream status + message.
+and webhooks. PdaxError is translated to a curated HTTPException (stable
+snake_case codes, upstream detail logged server-side only — see _fail).
 """
+
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -38,19 +40,43 @@ from ..pdax import (
 from ..pdax import (
     withdrawals as pwd,
 )
-from ..pdax.errors import PdaxError
+from ..pdax.errors import PdaxError, orizon_code
+from ..pdax.models.balances import BalancesResponse
 from ..pdax.models.common import Side
-from ..pdax.models.funding import FiatDepositRequest
-from ..pdax.models.ramp import OffRampRequest, OnRampRequest, _positive_decimal_str
+from ..pdax.models.funding import (
+    CryptoDepositAddress,
+    FiatDepositRequest,
+    FiatDepositResult,
+)
+from ..pdax.models.ramp import (
+    FundingQuote,
+    OffRampRequest,
+    OnRampRequest,
+    RampEstimate,
+    RampRecord,
+    _positive_decimal_str,
+)
 from ..pdax.models.trade import (
     FirmQuoteRequest,
     FirmQuoteV2Request,
     IndicativePriceParams,
     IndicativePriceV2Params,
+    Order,
     OrderRequest,
+    OrdersResponse,
+    Quote,
 )
-from ..pdax.models.webhooks import WebhookRegisterRequest
-from ..pdax.models.withdrawals import CryptoOutRequest, FiatWithdrawRequest
+from ..pdax.models.transactions import (
+    CryptoTransactionsResponse,
+    FiatTransactionsResponse,
+)
+from ..pdax.models.webhooks import WebhookRegisterRequest, WebhookRegistration
+from ..pdax.models.withdrawals import (
+    CryptoOutRequest,
+    CryptoOutResult,
+    FiatWithdrawRequest,
+    FiatWithdrawResult,
+)
 from ..security import require_api_key
 
 router = APIRouter(prefix="/pdax", tags=["pdax"])
@@ -62,9 +88,23 @@ router = APIRouter(prefix="/pdax", tags=["pdax"])
 secured = APIRouter(dependencies=[Depends(require_api_key)])
 
 
+logger = logging.getLogger(__name__)
+
+
 def _fail(e: PdaxError) -> HTTPException:
-    status = e.http_status if e.http_status and 400 <= e.http_status < 600 else 502
-    return HTTPException(status, detail=str(e))
+    """Translate a PdaxError into a curated client envelope.
+
+    The raw upstream message/code/status is logged server-side only; clients
+    get a stable snake_case Orizon code. Upstream 5xx and upstream auth
+    failures (401/403 — OUR PDAX credentials, never the caller's) collapse to
+    502 so they cannot be mistaken for an Orizon auth failure; genuine
+    client-input 4xx keep their status with the curated code.
+    """
+    logger.warning("pdax error: %s", e.to_dict())
+    status = e.http_status
+    if status is not None and 400 <= status < 500 and status not in (401, 403):
+        return HTTPException(status, detail=orizon_code(e.code))
+    return HTTPException(502, detail="upstream_unavailable")
 
 
 @router.get("/environment")
@@ -79,8 +119,22 @@ async def environment() -> dict:
 
 @router.get("/health")
 async def health() -> dict:
-    """Liveness + dependency check. Probes the PDAX auth handshake and reports
-    ok / degraded / unconfigured — never exposing credentials."""
+    """Non-actuating liveness report, read straight from settings. This route
+    is public, so it must never dial PDAX — anonymous callers could otherwise
+    drive repeated real logins (and lock the institutional account). The
+    authenticated /health/deep route performs the actual handshake probe."""
+    return {
+        "status": "ok",
+        "environment": settings.pdax_environment,
+        "configured": bool(settings.pdax_username and settings.pdax_password),
+    }
+
+
+@secured.get("/health/deep")
+async def health_deep() -> dict:
+    """Actuating dependency check (API-key guarded): probes the PDAX auth
+    handshake and reports ok / degraded / unconfigured — never exposing
+    credentials."""
     if not (settings.pdax_username and settings.pdax_password):
         return {"status": "unconfigured", "environment": settings.pdax_environment}
     try:
@@ -102,7 +156,7 @@ async def trade_price(
     side: Side,
     base_quantity: str,
     base_currency: str = "PHP",
-) -> dict:
+) -> Quote:
     """Indicative (non-binding) price for a pair."""
     try:
         params = IndicativePriceParams(
@@ -111,8 +165,7 @@ async def trade_price(
             side=side,
             base_quantity=base_quantity,
         )
-        quote = await pt.indicative_price(get_pdax_client(), params)
-        return quote.model_dump()
+        return await pt.indicative_price(get_pdax_client(), params)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -124,7 +177,7 @@ async def trade_price_v2(
     currency: str,
     quantity: str,
     base_currency: str = "PHP",
-) -> dict:
+) -> Quote:
     """Indicative price (v2 — receive-side currency + quantity)."""
     try:
         params = IndicativePriceV2Params(
@@ -134,47 +187,42 @@ async def trade_price_v2(
             currency=currency,
             quantity=quantity,
         )
-        quote = await pt.indicative_price_v2(get_pdax_client(), params)
-        return quote.model_dump()
+        return await pt.indicative_price_v2(get_pdax_client(), params)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/quote")
-async def trade_quote(req: FirmQuoteRequest) -> dict:
+async def trade_quote(req: FirmQuoteRequest) -> Quote:
     """Firm quote (expires in ~15s) acceptable via /trade/order."""
     try:
-        quote = await pt.firm_quote(get_pdax_client(), req)
-        return quote.model_dump()
+        return await pt.firm_quote(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/quote/v2")
-async def trade_quote_v2(req: FirmQuoteV2Request) -> dict:
+async def trade_quote_v2(req: FirmQuoteV2Request) -> Quote:
     """Firm quote (v2)."""
     try:
-        quote = await pt.firm_quote_v2(get_pdax_client(), req)
-        return quote.model_dump()
+        return await pt.firm_quote_v2(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/trade/order")
-async def trade_order(req: OrderRequest) -> dict:
+async def trade_order(req: OrderRequest) -> Order:
     """Accept a firm quote and execute the trade."""
     try:
-        order = await pt.place_order(get_pdax_client(), req)
-        return order.model_dump()
+        return await pt.place_order(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.get("/trade/orders/{order_id}")
-async def trade_order_details(order_id: int) -> dict:
+async def trade_order_details(order_id: int) -> Order:
     try:
-        order = await pt.get_order(get_pdax_client(), order_id)
-        return order.model_dump()
+        return await pt.get_order(get_pdax_client(), order_id)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -185,7 +233,7 @@ async def trade_orders(
     page_size: int = Query(10, alias="pageSize"),
     start_date: str | None = Query(None, alias="startDate"),
     end_date: str | None = Query(None, alias="endDate"),
-) -> dict:
+) -> OrdersResponse:
     try:
         orders = await pt.list_orders(
             get_pdax_client(),
@@ -194,59 +242,54 @@ async def trade_orders(
             start_date=start_date,
             end_date=end_date,
         )
-        return {"orders": [o.model_dump() for o in orders]}
+        return OrdersResponse(orders=orders)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── funding (deposits) ──────────────────────────────────────────
 @secured.get("/crypto/deposit")
-async def crypto_deposit(currency: str) -> dict:
+async def crypto_deposit(currency: str) -> CryptoDepositAddress:
     """Wallet address to deposit a crypto token, e.g. currency=USDCXLM."""
     try:
-        addr = await pf.crypto_deposit_address(get_pdax_client(), currency)
-        return addr.model_dump()
+        return await pf.crypto_deposit_address(get_pdax_client(), currency)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/fiat/deposit")
-async def fiat_deposit(req: FiatDepositRequest) -> dict:
+async def fiat_deposit(req: FiatDepositRequest) -> FiatDepositResult:
     """Initiate a PHP cash-in; returns a payment_checkout_url."""
     try:
-        result = await pf.fiat_deposit(get_pdax_client(), req)
-        return result.model_dump()
+        return await pf.fiat_deposit(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── withdrawals ─────────────────────────────────────────────────
 @secured.post("/fiat/withdraw")
-async def fiat_withdraw(req: FiatWithdrawRequest) -> dict:
+async def fiat_withdraw(req: FiatWithdrawRequest) -> FiatWithdrawResult:
     """Withdraw PHP to a bank / e-wallet beneficiary."""
     try:
-        result = await pwd.fiat_withdraw(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.fiat_withdraw(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/fiat/user-info-upload")
-async def fiat_user_info_upload(req: FiatWithdrawRequest) -> dict:
+async def fiat_user_info_upload(req: FiatWithdrawRequest) -> FiatWithdrawResult:
     """Upload sender/beneficiary travel-rule data for a fiat withdrawal."""
     try:
-        result = await pwd.user_info_upload(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.user_info_upload(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/crypto/withdraw")
-async def crypto_withdraw(req: CryptoOutRequest) -> dict:
+async def crypto_withdraw(req: CryptoOutRequest) -> CryptoOutResult:
     """Send a crypto token to an external address (e.g. USDCXLM)."""
     try:
-        result = await pwd.crypto_out(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.crypto_out(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -258,7 +301,7 @@ async def fiat_transactions(
     identifier: str | None = None,
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
-) -> dict:
+) -> FiatTransactionsResponse:
     """Track PHP cash-in/out by mode (CashIn/CashOut) or identifier."""
     try:
         txns = await ptx.fiat_transactions(
@@ -268,7 +311,7 @@ async def fiat_transactions(
             page=page,
             page_size=page_size,
         )
-        return {"transactions": [t.model_dump() for t in txns]}
+        return FiatTransactionsResponse(transactions=txns)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -280,7 +323,7 @@ async def crypto_transactions(
     type: str | None = None,
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
-) -> dict:
+) -> CryptoTransactionsResponse:
     """Track crypto deposits/withdrawals by identifier, hash, or type."""
     try:
         txns = await ptx.crypto_transactions(
@@ -291,29 +334,28 @@ async def crypto_transactions(
             page=page,
             page_size=page_size,
         )
-        return {"transactions": [t.model_dump() for t in txns]}
+        return CryptoTransactionsResponse(transactions=txns)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── balances ────────────────────────────────────────────────────
 @secured.get("/balances")
-async def balances(currency: str | None = None) -> dict:
+async def balances(currency: str | None = None) -> BalancesResponse:
     """View balances for all assets (or a single currency)."""
     try:
         items = await pb.get_balances(get_pdax_client(), currency)
-        return {"balances": [b.model_dump() for b in items]}
+        return BalancesResponse(balances=items)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── webhooks ────────────────────────────────────────────────────
 @secured.post("/webhooks/register")
-async def webhook_register(req: WebhookRegisterRequest) -> dict:
+async def webhook_register(req: WebhookRegisterRequest) -> WebhookRegistration:
     """Register this backend's URL to receive crypto or fiat events."""
     try:
-        reg = await pw.register_webhook(get_pdax_client(), req)
-        return reg.model_dump()
+        return await pw.register_webhook(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -399,7 +441,7 @@ async def ramp_estimate(
     direction: Literal["onramp", "offramp"],
     amount: str,
     currency: str | None = None,
-) -> dict:
+) -> RampEstimate:
     """Indicative conversion preview. `currency` denominates `amount`; pass
     currency=USDC on an on-ramp to price a target USDC amount (workflow cost)."""
     try:
@@ -407,14 +449,13 @@ async def ramp_estimate(
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        est = await pr.estimate(get_pdax_client(), direction, amount, currency)
-        return est.model_dump()
+        return await pr.estimate(get_pdax_client(), direction, amount, currency)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/ramp/funding-quote")
-async def ramp_funding_quote(usdc: str) -> dict:
+async def ramp_funding_quote(usdc: str) -> FundingQuote:
     """Pesos to pay to fund a workflow costing `usdc` USDC — buffered + rounded
     up so the amount always covers it."""
     try:
@@ -422,51 +463,74 @@ async def ramp_funding_quote(usdc: str) -> dict:
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        quote = await pr.funding_quote(get_pdax_client(), usdc)
-        return quote.model_dump()
+        return await pr.funding_quote(get_pdax_client(), usdc)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/ramp/onramp")
-async def ramp_onramp(req: OnRampRequest) -> dict:
+async def ramp_onramp(req: OnRampRequest) -> RampRecord:
     """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
     settlement is completed by the fiat-deposit webhook."""
     try:
         record = await pr.start_onramp(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
-    return record.model_dump()
+    return record
 
 
 @secured.post("/ramp/offramp")
-async def ramp_offramp(req: OffRampRequest) -> dict:
+async def ramp_offramp(req: OffRampRequest) -> RampRecord:
     """Start a USDCXLM → PHP ramp. Returns a deposit address for the agent to
     send USDC to; settlement is completed by the crypto-deposit webhook."""
     try:
         record = await pr.start_offramp(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
-    return record.model_dump()
+    return record
+
+
+def _mask_account_numbers(value: object) -> object:
+    """Recursively mask any *account_number* field to its last 4 characters —
+    the ramp list is a bulk view and must not enumerate full bank accounts."""
+    if isinstance(value, dict):
+        return {
+            k: (f"****{str(v)[-4:]}" if "account_number" in k and v else _mask_account_numbers(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_account_numbers(v) for v in value]
+    return value
 
 
 @secured.get("/ramp")
-async def ramp_list() -> dict:
-    """All ramps tracked this process lifetime."""
-    return {"ramps": [r.model_dump() for r in pr.ramp_store.list_all()]}
+async def ramp_list(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Ramps tracked this process lifetime (insertion order), paginated.
+    Account numbers are masked to their last 4 digits in this bulk view."""
+    records = pr.ramp_store.list_all()
+    page = records[offset : offset + limit]
+    return {
+        "ramps": [_mask_account_numbers(r.model_dump()) for r in page],
+        "total": len(records),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @secured.get("/ramp/{ramp_id}")
-async def ramp_status(ramp_id: str) -> dict:
+async def ramp_status(ramp_id: str) -> RampRecord:
     """Current state + stage history of a single ramp."""
     record = pr.ramp_store.get(ramp_id)
     if record is None:
         raise HTTPException(404, detail="ramp not found")
-    return record.model_dump()
+    return record
 
 
 @secured.post("/ramp/{ramp_id}/reconcile")
-async def ramp_reconcile(ramp_id: str) -> dict:
+async def ramp_reconcile(ramp_id: str) -> RampRecord:
     """Check PDAX for settlement and advance the ramp — used by the UI to track
     progress without relying on PDAX's redirect page."""
     try:
@@ -475,7 +539,7 @@ async def ramp_reconcile(ramp_id: str) -> dict:
         raise _fail(e) from e
     if record is None:
         raise HTTPException(404, detail="ramp not found")
-    return record.model_dump()
+    return record
 
 
 router.include_router(secured)

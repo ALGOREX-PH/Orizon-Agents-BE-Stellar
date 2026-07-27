@@ -6,8 +6,13 @@ services:
     plan: free
     branch: main
     rootDir: .
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    # Hash-verified install from the lockfile; regenerate with
+    # `uv pip compile requirements.txt -o requirements.lock --python-version 3.12 --generate-hashes`.
+    buildCommand: pip install -r requirements.lock
+    # Render terminates all ingress, so trusting X-Forwarded-* from any peer is
+    # safe here; keep-alive sits above the edge idle timeout for SSE, and the
+    # in-app request log supersedes uvicorn's access log.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 65 --no-access-log
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -15,6 +20,8 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: STELLAR_SIGNING_KEY
+        sync: false
+      - key: API_KEY
         sync: false
 
       # ── HTTP ────────────────────────────────────────────────────────────

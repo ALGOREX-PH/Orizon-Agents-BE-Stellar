@@ -5,10 +5,10 @@ import random
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 
@@ -26,7 +26,7 @@ class SeoBrief(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="seo.brief",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=build_openai_chat(settings.worker_model),
             instructions=(
                 "You are an SEO research agent. Given an intent, return a JSON brief with: "
                 "8–12 high-intent keywords, 2–4 audience clusters (concise labels), and a "

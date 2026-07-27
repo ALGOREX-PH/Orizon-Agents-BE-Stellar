@@ -12,6 +12,7 @@ them as `RampRecord`s:
 `handle_event` is the webhook entry point: it matches an inbound settlement
 event to a waiting ramp and advances it. The relevant Stellar asset is USDCXLM.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -53,8 +54,11 @@ async def estimate(
     workflow cost) → `php_amount` is the pesos needed."""
     if direction == "onramp":
         params = IndicativePriceV2Params(
-            side="buy", quote_currency=USDC, base_currency=PHP,
-            currency=currency or PHP, quantity=amount,
+            side="buy",
+            quote_currency=USDC,
+            base_currency=PHP,
+            currency=currency or PHP,
+            quantity=amount,
         )
         q = await trade.indicative_price_v2(client, params)
         return RampEstimate(
@@ -64,8 +68,11 @@ async def estimate(
             price=q.price,
         )
     params = IndicativePriceV2Params(
-        side="sell", quote_currency=USDC, base_currency=PHP,
-        currency=currency or USDC, quantity=amount,
+        side="sell",
+        quote_currency=USDC,
+        base_currency=PHP,
+        currency=currency or USDC,
+        quantity=amount,
     )
     q = await trade.indicative_price_v2(client, params)
     return RampEstimate(
@@ -84,9 +91,7 @@ async def funding_quote(client: PdaxClient, usdc_target: str) -> FundingQuote:
     per-trade minimum. Adds the safety buffer, rounds up, and floors at the PDAX
     fiat-deposit minimum, so the amount is always payable and always covers the
     workflow (any excess stays as USDC in the buyer's wallet)."""
-    ref = await estimate(
-        client, "onramp", settings.pdax_ramp_quote_reference_php, currency=PHP
-    )
+    ref = await estimate(client, "onramp", settings.pdax_ramp_quote_reference_php, currency=PHP)
     price = ref.price or 0.0
     buffer_bps = max(0, settings.pdax_ramp_buffer_bps)
     php_needed = float(usdc_target) * price
@@ -157,12 +162,18 @@ async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         quote = await trade.firm_quote_v2(
             client,
             FirmQuoteV2Request(
-                side="buy", quote_currency=USDC, base_currency=PHP,
-                currency=PHP, quantity=_num(record.php_amount),
+                side="buy",
+                quote_currency=USDC,
+                base_currency=PHP,
+                currency=PHP,
+                quantity=_num(record.php_amount),
             ),
         )
+        quote_id = quote.quote_id
+        if not quote_id:
+            raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
         order = await trade.place_order(
-            client, OrderRequest(quote_id=quote.quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
+            client, OrderRequest(quote_id=quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
         )
         record.order_id = order.order_id
         record.usdc_amount = order.base_quantity
@@ -231,57 +242,69 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         record.status, record.error = "failed", "missing payout details"
         return ramp_store.save(record)
 
-    record.status = "converting"
     try:
-        quote = await trade.firm_quote_v2(
-            client,
-            FirmQuoteV2Request(
-                side="sell", quote_currency=USDC, base_currency=PHP,
-                currency=USDC, quantity=_num(record.usdc_amount),
-            ),
-        )
-        order = await trade.place_order(
-            client, OrderRequest(quote_id=quote.quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
-        )
-        record.order_id = order.order_id
-        record.php_amount = order.total_amount
-        record.price = order.price
-        ramp_store.add_stage(record, "sell_usdc", "success", f"order {order.order_id}")
-    except PdaxError as e:
-        record.status, record.error = "failed", str(e)
-        ramp_store.add_stage(record, "sell_usdc", "failed", str(e))
-        return ramp_store.save(record)
+        record.status = "converting"
+        try:
+            quote = await trade.firm_quote_v2(
+                client,
+                FirmQuoteV2Request(
+                    side="sell",
+                    quote_currency=USDC,
+                    base_currency=PHP,
+                    currency=USDC,
+                    quantity=_num(record.usdc_amount),
+                ),
+            )
+            quote_id = quote.quote_id
+            if not quote_id:
+                raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
+            order = await trade.place_order(
+                client, OrderRequest(quote_id=quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
+            )
+            record.order_id = order.order_id
+            record.php_amount = order.total_amount
+            record.price = order.price
+            ramp_store.add_stage(record, "sell_usdc", "success", f"order {order.order_id}")
+        except PdaxError as e:
+            record.status, record.error = "failed", str(e)
+            ramp_store.add_stage(record, "sell_usdc", "failed", str(e))
+            return ramp_store.save(record)
 
-    record.status = "settling"
-    try:
-        result = await withdrawals.fiat_withdraw(
-            client,
-            FiatWithdrawRequest(
-                identifier=f"{payout.identifier}-payout",
-                amount=_num(record.php_amount),
-                currency=PHP,
-                method=payout.method,
-                fee_type=payout.fee_type,
-                sender_first_name=payout.sender_first_name,
-                sender_last_name=payout.sender_last_name,
-                sender_country_origin=payout.sender_country_origin,
-                source_of_funds=payout.source_of_funds,
-                beneficiary_first_name=payout.beneficiary_first_name,
-                beneficiary_last_name=payout.beneficiary_last_name,
-                beneficiary_bank_code=payout.beneficiary_bank_code,
-                beneficiary_account_name=payout.beneficiary_account_name,
-                beneficiary_account_number=payout.beneficiary_account_number,
-                purpose=payout.purpose,
-                relationship_of_sender_to_beneficiary=payout.relationship_of_sender_to_beneficiary,
-            ),
-        )
-        record.withdraw_request_id = result.request_id
-        record.status = "completed" if result.status != "FAILED" else "failed"
-        ramp_store.add_stage(record, "fiat_withdraw", "success", result.status)
-    except PdaxError as e:
-        record.status, record.error = "failed", str(e)
-        ramp_store.add_stage(record, "fiat_withdraw", "failed", str(e))
-    return ramp_store.save(record)
+        record.status = "settling"
+        try:
+            result = await withdrawals.fiat_withdraw(
+                client,
+                FiatWithdrawRequest(
+                    identifier=f"{payout.identifier}-payout",
+                    amount=_num(record.php_amount),
+                    currency=PHP,
+                    method=payout.method,
+                    fee_type=payout.fee_type,
+                    sender_first_name=payout.sender_first_name,
+                    sender_last_name=payout.sender_last_name,
+                    sender_country_origin=payout.sender_country_origin,
+                    source_of_funds=payout.source_of_funds,
+                    beneficiary_first_name=payout.beneficiary_first_name,
+                    beneficiary_last_name=payout.beneficiary_last_name,
+                    beneficiary_bank_code=payout.beneficiary_bank_code,
+                    beneficiary_account_name=payout.beneficiary_account_name,
+                    beneficiary_account_number=payout.beneficiary_account_number,
+                    purpose=payout.purpose,
+                    relationship_of_sender_to_beneficiary=payout.relationship_of_sender_to_beneficiary,
+                ),
+            )
+            record.withdraw_request_id = result.request_id
+            record.status = "completed" if result.status != "FAILED" else "failed"
+            ramp_store.add_stage(record, "fiat_withdraw", "success", result.status)
+        except PdaxError as e:
+            record.status, record.error = "failed", str(e)
+            ramp_store.add_stage(record, "fiat_withdraw", "failed", str(e))
+        return ramp_store.save(record)
+    finally:
+        # Payout PII (names, bank code, account number) lives only while the
+        # ramp is in flight — drop it as soon as the advance step finishes,
+        # whether it completed, failed, or raised.
+        _PAYOUTS.pop(record.ramp_id, None)
 
 
 def _match(event: CryptoEvent | FiatEvent):
@@ -322,19 +345,14 @@ async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
         if record.status != "awaiting_payment":
             return record
         if record.direction == "onramp" and record.identifier:
-            txns = await transactions.fiat_transactions(
-                client, identifier=record.identifier, mode="CashIn"
-            )
+            txns = await transactions.fiat_transactions(client, identifier=record.identifier, mode="CashIn")
             if any(str(t.status).upper() == "COMPLETED" for t in txns):
                 record.status = "funded"
                 return await advance_onramp(client, record)
         elif record.direction == "offramp" and record.deposit_address:
-            txns = await transactions.crypto_transactions(client, type="crypto_in")
-            for t in txns:
-                if (
-                    t.receiver_wallet_address == record.deposit_address
-                    and str(t.status).lower() == "completed"
-                ):
+            crypto_txns = await transactions.crypto_transactions(client, type="crypto_in")
+            for t in crypto_txns:
+                if t.receiver_wallet_address == record.deposit_address and str(t.status).lower() == "completed":
                     record.status = "funded"
                     return await advance_offramp(client, record)
         return record

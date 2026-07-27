@@ -5,10 +5,10 @@ import random
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 
@@ -31,7 +31,7 @@ class ResearchPro(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="research.pro",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=build_openai_chat(settings.worker_model),
             instructions=(
                 "You are a research synthesis agent. Given an intent, return 3–6 findings "
                 "(each a concrete claim + 0..1 confidence), 2–6 plausible source descriptors "

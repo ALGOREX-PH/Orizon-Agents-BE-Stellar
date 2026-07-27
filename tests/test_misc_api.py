@@ -1,4 +1,5 @@
 """Artifact retrieval and the simulated x402 payment flow."""
+
 from __future__ import annotations
 
 from app.schemas import Task
@@ -47,10 +48,7 @@ def test_x402_challenges_without_payment_header(client):
     )
     assert r.status_code == 402
     assert r.json() == {"status": "402", "receipt": None}
-    assert (
-        r.headers["x-orizon-payment-required"]
-        == "amount=1.500;agent=agt_01h8;token=USDC"
-    )
+    assert r.headers["x-orizon-payment-required"] == "amount=1.500;agent=agt_01h8;token=USDC"
 
 
 def test_x402_settles_with_payment_header(client):

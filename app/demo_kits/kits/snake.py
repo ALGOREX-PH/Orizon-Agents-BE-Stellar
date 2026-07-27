@@ -8,8 +8,16 @@ SNAKE_KIT = DemoKit(
         tagline="Snake reborn with neon trails, bonus prey, and a 5-deep leaderboard.",
         audience=["casual gamers", "lunch-break players", "nostalgia seekers"],
         keywords=[
-            "snake", "arcade", "html5", "canvas", "leaderboard",
-            "single-file", "keyboard", "swipe", "browser game", "retro",
+            "snake",
+            "arcade",
+            "html5",
+            "canvas",
+            "leaderboard",
+            "single-file",
+            "keyboard",
+            "swipe",
+            "browser game",
+            "retro",
         ],
     ),
     features=[
@@ -53,9 +61,9 @@ SNAKE_KIT = DemoKit(
         border="#1F3D27",
         text="#E8F8EE",
         muted="#7AA088",
-        primary="#3DFF85",   # neon green
-        accent="#00FFD1",    # cyan
-        danger="#FF2EC4",    # magenta (bonus food)
+        primary="#3DFF85",  # neon green
+        accent="#00FFD1",  # cyan
+        danger="#FF2EC4",  # magenta (bonus food)
     ),
     typography=TypographySpec(
         family_ui="'JetBrains Mono', ui-monospace, monospace",

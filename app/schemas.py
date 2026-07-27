@@ -57,7 +57,7 @@ class PlanStep(BaseModel):
     rationale: str = Field(..., description="<= 20 words")
     est_price_usdc: float = Field(..., ge=0)
     est_eta_seconds: float = Field(..., ge=0)
-    rep_bps: int | None = None          # smoothed reputation at plan time (0..10_000)
+    rep_bps: int | None = None  # smoothed reputation at plan time (0..10_000)
     rep_source: Literal["onchain", "prior"] | None = None
 
 
@@ -102,7 +102,7 @@ class OverviewMetrics(BaseModel):
     agents_online: int
     tasks_per_sec: float
     avg_completion: float  # 0..1
-    avg_trust: float       # 0..5
+    avg_trust: float  # 0..5
     throughput: list[int]  # sparkline
     skills: list[dict[str, Any]]  # [{name, pct, tone}]
 
@@ -125,9 +125,7 @@ class ExecuteRequest(BaseModel):
     auth_id_hex: str | None = Field(
         default=None, pattern=r"^[0-9a-fA-F]{32}$"
     )  # 32-hex auth id from PaymentEscrow.authorize
-    payer: str | None = Field(
-        default=None, pattern=r"^G[A-Z2-7]{55}$"
-    )  # G... address of the payer (from Freighter)
+    payer: str | None = Field(default=None, pattern=r"^G[A-Z2-7]{55}$")  # G... address of the payer (from Freighter)
 
 
 class ExecuteResponse(BaseModel):

@@ -12,6 +12,7 @@ Each ramp is tracked as a `RampRecord` with per-step `RampStage`s. The slow
 steps (a human paying, or an on-chain transfer landing) are advanced by PDAX
 settlement webhooks, not blocking calls.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
@@ -83,14 +84,13 @@ class OnRampRequest(BaseModel):
     channel; the converted USDCXLM is delivered to `stellar_address`."""
 
     php_amount: str
-    stellar_address: str = Field(
-        ..., pattern=r"^G[A-Z2-7]{55}$", description="Where USDCXLM is delivered"
-    )
+    stellar_address: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="Where USDCXLM is delivered")
 
     @field_validator("php_amount")
     @classmethod
     def _check_php_amount(cls, v: str) -> str:
         return _positive_decimal_str(v, "10000000")
+
     method: str = Field(..., max_length=64, description="Fiat deposit channel, e.g. instapay_upay_cashin")
     identifier: str = Field(..., max_length=128)
     sender_first_name: str = Field(..., max_length=200)
@@ -114,6 +114,7 @@ class OffRampRequest(BaseModel):
     @classmethod
     def _check_usdc_amount(cls, v: str) -> str:
         return _positive_decimal_str(v, "100000")
+
     beneficiary_bank_code: str = Field(..., max_length=200)
     beneficiary_account_name: str = Field(..., max_length=200)
     beneficiary_account_number: str = Field(..., max_length=200)

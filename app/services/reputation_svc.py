@@ -23,6 +23,7 @@ ratings sink an agent below the floor quickly. Failures never fabricate
 evidence: if the chain is unreachable the caller gets the prior, marked
 `source="prior"`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,9 +46,9 @@ WILSON_Z = 1.0
 # Mirrors of the deployed ReputationLedger v2 on-chain constants
 # (contract/reputation-ledger/src/lib.rs) — decay happens on-chain; these are
 # surfaced read-only so the API can describe the full scoring pipeline.
-EPOCH_SECONDS = 604_800          # one decay epoch = 1 week
-DECAY_BPS_PER_EPOCH = 9_250      # evidence retains 92.5% per epoch (~9-week half-life)
-MAX_DECAY_EPOCHS = 96            # beyond this, stale evidence is fully forgotten
+EPOCH_SECONDS = 604_800  # one decay epoch = 1 week
+DECAY_BPS_PER_EPOCH = 9_250  # evidence retains 92.5% per epoch (~9-week half-life)
+MAX_DECAY_EPOCHS = 96  # beyond this, stale evidence is fully forgotten
 
 RepSource = Literal["onchain", "prior"]
 
@@ -56,12 +57,12 @@ class RepInfo(BaseModel):
     """Aggregated reputation for one agent, ready for routing and display."""
 
     agent_id: str
-    smoothed_bps: int      # prior-smoothed mean, 0..10_000
-    lower_bound_bps: int   # conservative bound used for the routing floor
-    avg_bps: int           # unsmoothed decayed on-chain mean (0 = no evidence)
-    count: int             # lifetime rating count
-    weight: int            # decayed evidence mass, stroops
-    disputed: int          # lifetime dispute count
+    smoothed_bps: int  # prior-smoothed mean, 0..10_000
+    lower_bound_bps: int  # conservative bound used for the routing floor
+    avg_bps: int  # unsmoothed decayed on-chain mean (0 = no evidence)
+    count: int  # lifetime rating count
+    weight: int  # decayed evidence mass, stroops
+    disputed: int  # lifetime dispute count
     dispute_rate_bps: int  # disputed / count, in bps
     source: RepSource
 
@@ -194,9 +195,7 @@ async def fetch_rep(agent_id: str) -> RepInfo:
         )
 
     try:
-        state = await rcache.get_or_set(
-            f"repstate:{agent_id}", settings.reputation_read_ttl_seconds, _read
-        )
+        state = await rcache.get_or_set(f"repstate:{agent_id}", settings.reputation_read_ttl_seconds, _read)
         if not isinstance(state, dict):
             return _prior_info(agent_id)
         return _info_from_state(agent_id, state)
@@ -205,9 +204,7 @@ async def fetch_rep(agent_id: str) -> RepInfo:
         return _prior_info(agent_id)
 
 
-async def fetch_reps(
-    agent_ids: list[str], timeout_seconds: float = 2.5
-) -> dict[str, RepInfo]:
+async def fetch_reps(agent_ids: list[str], timeout_seconds: float = 2.5) -> dict[str, RepInfo]:
     """Concurrent reads for a set of agents, bounded by one overall timeout.
 
     Never raises: on timeout or error every missing agent falls back to the

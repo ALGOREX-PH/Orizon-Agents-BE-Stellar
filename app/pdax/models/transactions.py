@@ -5,6 +5,7 @@ GET /v1/fiat/transactions filters by mode (CashIn/CashOut) and identifier;
 GET /v1/crypto/transactions filters by identifier, txn_hash, or type. Both
 paginate via page/pageSize.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -34,6 +35,12 @@ class FiatTransaction(BaseModel):
     retried_methods: list[RetryMethod] = Field(default_factory=list)
 
 
+class FiatTransactionsResponse(BaseModel):
+    """Envelope for the fiat transaction-history list route."""
+
+    transactions: list[FiatTransaction]
+
+
 class CryptoTransaction(BaseModel):
     """One crypto deposit/withdrawal record."""
 
@@ -56,3 +63,9 @@ class CryptoTransaction(BaseModel):
     receiver_wallet_address: str | None = None
     receiver_wallet_address_tag: str | None = None
     identifier: str | None = None
+
+
+class CryptoTransactionsResponse(BaseModel):
+    """Envelope for the crypto transaction-history list route."""
+
+    transactions: list[CryptoTransaction]

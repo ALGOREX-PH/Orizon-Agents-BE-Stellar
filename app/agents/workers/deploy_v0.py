@@ -7,6 +7,7 @@ still happens in execution_svc._settle_onchain() — this worker only emits the
 display-layer "sealed · preview ready" message that makes the pipeline feel
 like a real CI/CD step.
 """
+
 from __future__ import annotations
 
 import asyncio

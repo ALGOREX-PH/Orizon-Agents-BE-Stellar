@@ -1,4 +1,6 @@
-"""Unit tests for the Soroban read cache (TTL, sweep, single-flight)."""
+"""Unit tests for the Soroban read cache (TTL, sweep, shielded single-flight,
+negative caching)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -81,7 +83,27 @@ def test_concurrent_misses_share_one_producer_call():
     assert calls["n"] == 1
 
 
-def test_producer_failure_is_not_cached():
+def test_producer_failure_is_negatively_cached():
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        raise RuntimeError("rpc down")
+
+    async def run():
+        with pytest.raises(RuntimeError):
+            await cache.get_or_set("k", 60.0, flaky)
+        # Within the negative TTL the cached failure re-raises without
+        # spawning any new upstream work.
+        with pytest.raises(RuntimeError):
+            await cache.get_or_set("k", 60.0, flaky)
+
+    asyncio.run(run())
+    assert calls["n"] == 1
+
+
+def test_negative_cache_expires(monkeypatch):
+    monkeypatch.setattr(cache, "_NEGATIVE_TTL_SECONDS", 0.03)
     calls = {"n": 0}
 
     async def flaky():
@@ -93,7 +115,43 @@ def test_producer_failure_is_not_cached():
     async def run():
         with pytest.raises(RuntimeError):
             await cache.get_or_set("k", 60.0, flaky)
+        await asyncio.sleep(0.06)
         return await cache.get_or_set("k", 60.0, flaky)
 
     assert asyncio.run(run()) == "ok"
     assert calls["n"] == 2
+
+
+def test_cancelled_caller_still_caches():
+    producer, calls = _counting_producer(delay=0.05)
+
+    async def run():
+        caller = asyncio.create_task(cache.get_or_set("k", 60.0, producer))
+        await asyncio.sleep(0.01)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        # The flight survived the cancelled caller and its result landed in
+        # the cache — the next get is a hit, not a fresh producer run.
+        await asyncio.sleep(0.1)
+        return await cache.get_or_set("k", 60.0, producer)
+
+    assert asyncio.run(run()) == "v"
+    assert calls["n"] == 1
+
+
+def test_second_caller_joins_flight_after_first_cancelled():
+    producer, calls = _counting_producer(delay=0.05)
+
+    async def run():
+        first = asyncio.create_task(cache.get_or_set("k", 60.0, producer))
+        await asyncio.sleep(0.01)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        # A caller arriving while the orphaned flight is still running joins
+        # it instead of spawning a second producer.
+        return await cache.get_or_set("k", 60.0, producer)
+
+    assert asyncio.run(run()) == "v"
+    assert calls["n"] == 1

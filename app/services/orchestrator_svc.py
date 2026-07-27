@@ -7,6 +7,7 @@ import secrets
 from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
+from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
 from ..schemas import DecomposeResponse, Plan, PlanStep, StoredPlan
 from ..state import state
@@ -31,12 +32,12 @@ _KIT_PIPELINE: list[tuple[str, str]] = [
 
 # ETAs are rough but realistic per agent for a kit run.
 _KIT_ETAS: dict[str, float] = {
-    "agt_09l5": 0.6,   # research (deterministic from kit)
-    "agt_05x7": 0.5,   # seo brief (deterministic from kit)
-    "agt_02k2": 0.4,   # design tokens (deterministic from kit)
-    "agt_11c0": 2.6,   # code.gen (real LLM call — heaviest step)
-    "agt_12r0": 1.8,   # code.critic (real LLM call)
-    "agt_08j2": 0.4,   # deploy (deterministic seal)
+    "agt_09l5": 0.6,  # research (deterministic from kit)
+    "agt_05x7": 0.5,  # seo brief (deterministic from kit)
+    "agt_02k2": 0.4,  # design tokens (deterministic from kit)
+    "agt_11c0": 2.6,  # code.gen (real LLM call — heaviest step)
+    "agt_12r0": 1.8,  # code.critic (real LLM call)
+    "agt_08j2": 0.4,  # deploy (deterministic seal)
 }
 
 
@@ -52,17 +53,14 @@ def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
     routable = [a for a in agents if reputation_svc.passes_floor(reps.get(a.id))]
     if len(routable) < _MIN_ROUTABLE_AGENTS:
         logger.warning(
-            "reputation floor left only %d/%d agents routable; "
-            "keeping top %d by smoothed score",
+            "reputation floor left only %d/%d agents routable; keeping top %d by smoothed score",
             len(routable),
             len(agents),
             _MIN_ROUTABLE_AGENTS,
         )
         routable = sorted(
             agents,
-            key=lambda a: (
-                reps[a.id].smoothed_bps if a.id in reps else round(a.rep * 2000)
-            ),
+            key=lambda a: reps[a.id].smoothed_bps if a.id in reps else round(a.rep * 2000),
             reverse=True,
         )[:_MIN_ROUTABLE_AGENTS]
 
@@ -72,16 +70,11 @@ def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
         # Live smoothed score on the 0–5 scale the prompt already uses;
         # seeded rep only when the agent has no reputation entry.
         rep_display = info.smoothed_bps / 2000 if info is not None else a.rep
-        lines.append(
-            f"- id={a.id} name={a.name} price={a.price:.3f} rep={rep_display:.2f} "
-            f"skills={','.join(a.skills)}"
-        )
+        lines.append(f"- id={a.id} name={a.name} price={a.price:.3f} rep={rep_display:.2f} skills={','.join(a.skills)}")
     return "\n".join(lines)
 
 
-async def _build_kit_plan(
-    intent: str, kit: DemoKit, reps: dict[str, reputation_svc.RepInfo]
-) -> DecomposeResponse:
+async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_svc.RepInfo]) -> DecomposeResponse:
     """Deterministic 6-step plan for a curated demo intent. No LLM call.
 
     A short randomized sleep up front mimics orchestrator "thinking time" so
@@ -152,7 +145,13 @@ async def decompose(intent: str) -> DecomposeResponse:
 USER_INTENT: {intent}
 
 Return the Plan."""
-    result = await orchestrator_agent.arun(prompt)
+    # Hard end-to-end budget for the planning call — without it a hung
+    # upstream would pin this request for the OpenAI client's full
+    # timeout x retry envelope. The router maps TimeoutError to a 504.
+    result = await asyncio.wait_for(
+        orchestrator_agent.arun(prompt),
+        timeout=settings.decompose_timeout_seconds,
+    )
     plan: Plan = result.content  # type: ignore[assignment]
 
     # Clamp to known agents; backfill names + snap price to registry truth.

@@ -10,6 +10,7 @@ httpx joins a relative request path onto `base_url` only when the base ends
 with "/" and the path has no leading slash — both enforced here, so callers
 pass paths like "pdax-institution/v1/balances".
 """
+
 from __future__ import annotations
 
 import time
@@ -30,9 +31,7 @@ class PdaxClient:
         base = base_url().rstrip("/") + "/"
         self._http = httpx.AsyncClient(base_url=base, timeout=timeout)
         self._auth = PdaxAuth()
-        self._limiter = RateLimiter(
-            settings.pdax_rate_limit_per_sec, settings.pdax_rate_limit_burst
-        )
+        self._limiter = RateLimiter(settings.pdax_rate_limit_per_sec, settings.pdax_rate_limit_burst)
         self._retries = max(1, settings.pdax_max_retries)
 
     async def request(
@@ -54,9 +53,7 @@ class PdaxClient:
                 headers.update(await self._auth.access_headers(self._http))
             t0 = time.monotonic()
             try:
-                resp = await self._http.request(
-                    method, rel, params=clean_params or None, json=json, headers=headers
-                )
+                resp = await self._http.request(method, rel, params=clean_params or None, json=json, headers=headers)
             except httpx.HTTPError as e:
                 log_call(method, rel, None, (time.monotonic() - t0) * 1000, attempt=attempt, error=str(e))
                 raise PdaxError(f"PDAX transport error: {e}") from e
@@ -101,3 +98,17 @@ def get_pdax_client() -> PdaxClient:
     if _client is None:
         _client = PdaxClient()
     return _client
+
+
+async def aclose_pdax_client() -> None:
+    """Close the process-wide client's transport if it was ever created.
+
+    Called from app shutdown. Resets the singleton so any later call to
+    `get_pdax_client` lazily rebuilds it (relevant when the lifespan is
+    re-entered, e.g. across TestClient contexts).
+    """
+    global _client
+    if _client is None:
+        return
+    client, _client = _client, None
+    await client.aclose()

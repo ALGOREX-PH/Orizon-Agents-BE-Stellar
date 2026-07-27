@@ -174,9 +174,7 @@ receipt = sc.invoke_with_server_key(
         sc.bytes16(job_id),
     ],
 )
-await _emit(task_id, start, "cost",
-    f"x402 charge tx {receipt['hash'][:10]}…  "
-    f"{step.est_price_usdc:.3f} USDC settled")
+await _emit(task_id, start, "cost", f"x402 charge tx {receipt['hash'][:10]}…  {step.est_price_usdc:.3f} USDC settled")
 ```
 
 `STELLAR_SIGNING_KEY` must be present and fund the `settler` role on

@@ -6,6 +6,7 @@ code, method, source of funds, purpose, relationship, fee type, sex) and a
 travel-rule requirement for amounts ≥ 50,000 PHP. Validating here — before the
 network call — turns a slow round-trip 400 into an instant, specific error.
 """
+
 from __future__ import annotations
 
 from . import constants as c
@@ -54,14 +55,9 @@ def _travel_rule(req: FiatDepositRequest | FiatWithdrawRequest) -> None:
         and getattr(req, "sender_country", None)
     )
     has_nid = bool(getattr(req, "sender_national_identity_number", None))
-    has_dob = bool(
-        getattr(req, "sender_dob", None) and getattr(req, "sender_place_of_birth", None)
-    )
+    has_dob = bool(getattr(req, "sender_dob", None) and getattr(req, "sender_place_of_birth", None))
     if not (has_address or has_nid or has_dob):
-        _bad(
-            "amount >= 50,000 PHP requires sender address, national ID, "
-            "or date + place of birth (travel rule)"
-        )
+        _bad("amount >= 50,000 PHP requires sender address, national ID, or date + place of birth (travel rule)")
 
 
 def validate_fiat_deposit(req: FiatDepositRequest) -> None:

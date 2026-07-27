@@ -8,14 +8,15 @@ returns a revised, polished CodeArtifact.
 This is where the "agents hire agents" premise pays off: the draft was
 already senior-level; the critic pushes it to shipping-quality.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .code_gen import CodeArtifact, coerce_artifact  # reuse schema + JSON-string coercion
 
 INSTRUCTIONS = """You are Orizon's senior code reviewer.
@@ -72,10 +73,7 @@ def _build_critic() -> Agent:
     # temperature on Chat Completions. Let the model default.
     return Agent(
         name="code.critic",
-        model=OpenAIChat(
-            id=settings.worker_model,
-            api_key=settings.openai_api_key,
-        ),
+        model=build_openai_chat(settings.worker_model),
         instructions=INSTRUCTIONS,
         output_schema=CodeArtifact,
     )
@@ -94,15 +92,8 @@ class CodeCritic:
         draft_html: str,
         violations: list[str],
     ) -> dict[str, Any]:
-        viol_block = (
-            "\n".join(f"  - {v}" for v in violations) if violations else "  (none)"
-        )
-        prompt = (
-            f"INTENT: {intent}\n"
-            f"RATIONALE: {rationale}\n"
-            f"VIOLATIONS:\n{viol_block}\n\n"
-            f"DRAFT_HTML:\n{draft_html}"
-        )
+        viol_block = "\n".join(f"  - {v}" for v in violations) if violations else "  (none)"
+        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\nVIOLATIONS:\n{viol_block}\n\nDRAFT_HTML:\n{draft_html}"
         result = await self._agent.arun(prompt)
         out = coerce_artifact(result.content)
 

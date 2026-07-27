@@ -1,5 +1,6 @@
 """Reputation wiring tests — read endpoints, plan stamping, floor routing,
 and the settler's best-effort rating submission."""
+
 from __future__ import annotations
 
 import asyncio
@@ -92,9 +93,7 @@ def test_reputation_params_not_shadowed_by_agent_route(client):
 
 
 def test_kit_decompose_stamps_reputation_fields(client):
-    r = client.post(
-        "/api/orchestrator/decompose", json={"intent": "tetris game in html"}
-    )
+    r = client.post("/api/orchestrator/decompose", json={"intent": "tetris game in html"})
     assert r.status_code == 200
     steps = r.json()["steps"]
     assert steps
@@ -124,10 +123,7 @@ def test_floor_never_shrinks_below_three_agents():
     seed_registry()
     agents = state.list_agents()
     # Every agent fails the floor, with distinct smoothed scores.
-    reps = {
-        a.id: _info(a.id, smoothed=1000 + i * 10, lower=100)
-        for i, a in enumerate(agents)
-    }
+    reps = {a.id: _info(a.id, smoothed=1000 + i * 10, lower=100) for i, a in enumerate(agents)}
 
     fragment = orchestrator_svc._registry_prompt_fragment(reps)
 

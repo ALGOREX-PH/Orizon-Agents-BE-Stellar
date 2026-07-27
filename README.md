@@ -91,7 +91,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-71 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+173 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed. `ruff check`, `ruff format --check`, and `mypy` (config in `pyproject.toml`) guard style and types; CI runs all four on every push and PR.
 
 ## Environment variables
 
@@ -156,7 +156,9 @@ The contracts are live on Stellar **mainnet** — `render.yaml` ships these as t
 
 - Rate-limited (non-exempt) responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`; throttled requests get `429` + `Retry-After`.
 - Every response carries hardening headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
-- Every response echoes an `X-Request-ID` (yours, or a generated one) and is logged as one line: method, path, status, duration, request id.
+- Every response echoes an `X-Request-ID` (yours, or a generated one). Logs leave as single-line JSON — every record (access line and service logs alike) carries the request id, so a 500 and its traceback correlate.
+- Error responses share one envelope: the legacy `detail` plus `error: {code, message, request_id}` — the same shape for 4xx, validation errors, 429s, and 500s.
 - Storage is in-memory. State resets on restart.
+- Public-demo scope: task history (`/api/tasks`, traces, artifacts) is world-readable by design so visitors can watch runs. Session-scoped task auth is the planned next step before real users bring real intents.
 - 4 real Agno workers (`copywrite.v3`, `seo.brief`, `research.pro`, `sol-audit`) + `code.gen`; the remaining workers are mocks.
 - Payments and ERC-8004 proofs are simulated unless `STELLAR_SIGNING_KEY` is set — then they become real testnet transactions.

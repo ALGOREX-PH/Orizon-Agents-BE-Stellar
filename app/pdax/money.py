@@ -6,6 +6,7 @@ never be formatted from a binary float — `17.18` can serialize as
 `17.179999999999998` and trip PDAX's step/precision validation. These helpers
 keep amounts as `Decimal` and emit a clean fixed-point string.
 """
+
 from __future__ import annotations
 
 from decimal import ROUND_DOWN, ROUND_HALF_EVEN, ROUND_UP, Decimal, InvalidOperation

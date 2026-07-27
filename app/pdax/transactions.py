@@ -5,6 +5,7 @@ Both return enveloped lists and paginate via page/pageSize. Fiat filters by
 mode (CashIn/CashOut) + identifier; crypto filters by identifier, txn_hash,
 or type.
 """
+
 from __future__ import annotations
 
 from .client import PdaxClient

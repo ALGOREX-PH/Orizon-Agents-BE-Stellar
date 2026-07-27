@@ -16,6 +16,11 @@ router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 async def orchestrator_decompose(req: DecomposeRequest) -> DecomposeResponse:
     try:
         return await decompose(req.intent)
+    except TimeoutError as e:
+        # asyncio.wait_for tripped decompose_timeout_seconds — the LLM hung,
+        # nothing else failed. Distinct from the blanket 502 below.
+        logger.warning("decompose timed out for intent %r", req.intent)
+        raise HTTPException(504, "decompose_timeout") from e
     except Exception as e:
         logger.exception("decompose failed for intent %r", req.intent)
         raise HTTPException(502, "decompose_failed") from e

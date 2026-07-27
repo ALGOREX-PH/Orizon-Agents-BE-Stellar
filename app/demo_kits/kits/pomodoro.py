@@ -8,8 +8,16 @@ POMODORO_KIT = DemoKit(
         tagline="A deep-work timer with rituals: cycles, chimes, and a daily tomato counter.",
         audience=["focus seekers", "knowledge workers", "students", "remote workers"],
         keywords=[
-            "pomodoro", "focus", "timer", "deep work", "productivity",
-            "browser", "notification", "single-file html", "cycles", "ritual",
+            "pomodoro",
+            "focus",
+            "timer",
+            "deep work",
+            "productivity",
+            "browser",
+            "notification",
+            "single-file html",
+            "cycles",
+            "ritual",
         ],
     ),
     features=[
@@ -53,8 +61,8 @@ POMODORO_KIT = DemoKit(
         border="#2E2354",
         text="#F4F0FE",
         muted="#9C92BD",
-        primary="#FF9F1C",   # amber — the tomato accent
-        accent="#7A5CFF",    # violet — secondary
+        primary="#FF9F1C",  # amber — the tomato accent
+        accent="#7A5CFF",  # violet — secondary
         danger="#FF4D6D",
     ),
     typography=TypographySpec(

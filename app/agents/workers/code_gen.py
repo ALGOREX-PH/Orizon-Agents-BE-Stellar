@@ -4,10 +4,10 @@ import logging
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 logger = logging.getLogger(__name__)
@@ -24,9 +24,7 @@ class CodeArtifact(BaseModel):
     summary: str = Field(..., max_length=280)
     files: list[ArtifactFile] = Field(..., min_length=1, max_length=5)
     entry: str = Field(..., description="Path of the main file, matches one of files[].path")
-    preview_html: str = Field(
-        ..., description="Self-contained HTML document for the sandboxed preview iframe"
-    )
+    preview_html: str = Field(..., description="Self-contained HTML document for the sandboxed preview iframe")
 
 
 def coerce_artifact(content: Any) -> CodeArtifact:
@@ -56,9 +54,7 @@ def coerce_artifact(content: Any) -> CodeArtifact:
         try:
             return CodeArtifact.model_validate_json(s)
         except Exception as e:
-            logger.warning(
-                "code.gen direct JSON parse failed, trying embedded object: %s", e
-            )
+            logger.warning("code.gen direct JSON parse failed, trying embedded object: %s", e)
         # Try to find the first balanced JSON object in the string
         m = re.search(r"\{.*\}", s, re.DOTALL)
         if m:
@@ -66,12 +62,8 @@ def coerce_artifact(content: Any) -> CodeArtifact:
                 return CodeArtifact.model_validate(json.loads(m.group(0)))
             except Exception as e:
                 logger.warning("code.gen embedded JSON parse failed: %s", e)
-                raise ValueError(
-                    f"code.gen returned unparseable JSON: {str(e)[:160]}"
-                ) from e
-        raise ValueError(
-            f"code.gen returned a string without JSON object (first 160 chars): {s[:160]}"
-        )
+                raise ValueError(f"code.gen returned unparseable JSON: {str(e)[:160]}") from e
+        raise ValueError(f"code.gen returned a string without JSON object (first 160 chars): {s[:160]}")
     raise TypeError(f"unexpected code.gen content type: {type(content).__name__}")
 
 
@@ -192,10 +184,7 @@ class CodeGen(Worker):
         # runs as a separate top-level `code.critic` step in the pipeline.
         self._agent = Agent(
             name="code.gen",
-            model=OpenAIChat(
-                id=settings.worker_model,
-                api_key=settings.openai_api_key,
-            ),
+            model=build_openai_chat(settings.worker_model),
             instructions=INSTRUCTIONS,
             output_schema=CodeArtifact,
         )
@@ -233,9 +222,7 @@ class CodeGen(Worker):
             )
             features = kit.get("features", []) or []
             if features:
-                lines = "\n".join(
-                    f"- {f['label']}: {f['detail']}" for f in features
-                )
+                lines = "\n".join(f"- {f['label']}: {f['detail']}" for f in features)
                 parts.append(f"## FEATURES (implement every one)\n{lines}")
 
             addendum = kit.get("code_gen_addendum") or ""
@@ -257,23 +244,15 @@ class CodeGen(Worker):
             audiences = seo.get("audiences", []) or []
             if brand_name or tagline:
                 parts.append(
-                    "## BRAND\n"
-                    f"- name: {brand_name}\n"
-                    f"- tagline: {tagline}\n"
-                    f"- audience: {', '.join(audiences)}"
+                    f"## BRAND\n- name: {brand_name}\n- tagline: {tagline}\n- audience: {', '.join(audiences)}"
                 )
 
         # Feature brief from research.pro (only used if no kit features in prompt)
         research = context.get("research.pro")
-        if (
-            isinstance(research, dict)
-            and "## FEATURES" not in "\n".join(parts)
-        ):
+        if isinstance(research, dict) and "## FEATURES" not in "\n".join(parts):
             findings = research.get("findings", []) or []
             if findings:
-                lines = "\n".join(
-                    f"- {f.get('claim', '')}" for f in findings[:8]
-                )
+                lines = "\n".join(f"- {f.get('claim', '')}" for f in findings[:8])
                 parts.append(f"## FEATURES (research-derived)\n{lines}")
 
         # Design tokens from design.figma
@@ -287,11 +266,7 @@ class CodeGen(Worker):
             if css:
                 block += f"Copy this :root block into your CSS verbatim:\n```\n{css}\n```\n"
             if family_ui or family_display:
-                block += (
-                    f"Font stacks:\n"
-                    f"- family_ui: {family_ui}\n"
-                    f"- family_display: {family_display}\n"
-                )
+                block += f"Font stacks:\n- family_ui: {family_ui}\n- family_display: {family_display}\n"
             parts.append(block.rstrip())
 
         return "\n\n".join(parts)

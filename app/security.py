@@ -11,8 +11,10 @@ Lightweight, dependency-free hardening primitives.
 - `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
   INFO access log per request (method, path, status, duration, id).
 """
+
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import math
@@ -31,6 +33,36 @@ logger = logging.getLogger(__name__)
 # Paths that must never be throttled (probes + root ping).
 EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
 
+# Current request's id — set by RequestContextMiddleware, readable from any
+# code running in the request's task context (error handlers, log records).
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+class RequestIdLogFilter(logging.Filter):
+    """Stamp every LogRecord with the current request id ("-" outside a
+    request) so formatters can correlate service logs with access lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_var.get()
+        return True
+
+
+def client_key(scope: dict) -> str:
+    """Resolve the client key used for rate limiting and access logs.
+
+    Keys on the LAST X-Forwarded-For hop: proxies append, so the leftmost
+    entries are client-controlled — trusting them would let a caller rotate
+    fake IPs to bypass the limiter and bloat the bucket table.
+    """
+    headers = dict(scope.get("headers") or [])
+    fwd = headers.get(b"x-forwarded-for")
+    if fwd:
+        last = fwd.decode("latin-1").split(",")[-1].strip()
+        if last:
+            return last
+    client = scope.get("client")
+    return client[0] if client else "unknown"
+
 
 async def require_api_key(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -42,9 +74,7 @@ async def require_api_key(
     # Compare utf-8 bytes, not str: compare_digest raises TypeError on
     # non-ASCII str input (Starlette decodes headers latin-1), which would
     # turn a bad key into a 500 instead of a 401.
-    if x_api_key is None or not secrets.compare_digest(
-        x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")
-    ):
+    if x_api_key is None or not secrets.compare_digest(x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
@@ -67,11 +97,18 @@ class RequestContextMiddleware:
             return
 
         headers = dict(scope.get("headers") or [])
-        request_id = (
-            (headers.get(b"x-request-id") or b"").decode("latin-1").strip()[:64]
-        )
+        request_id = (headers.get(b"x-request-id") or b"").decode("latin-1").strip()[:64]
         if not request_id:
             request_id = uuid.uuid4().hex[:16]
+
+        # Deliberately never reset: the 500 handler runs on the outermost
+        # ServerErrorMiddleware layer AFTER this frame has unwound, so a
+        # finally-reset would erase the id before that handler reads it.
+        # Each request runs in its own task context, so nothing leaks across
+        # requests.
+        request_id_var.set(request_id)
+        # Also visible to route handlers as request.state.request_id.
+        scope.setdefault("state", {})["request_id"] = request_id
 
         method = scope.get("method", "-")
         path = scope.get("path", "-")
@@ -85,12 +122,15 @@ class RequestContextMiddleware:
                 if path not in EXEMPT_PATHS:
                     duration_ms = (time.monotonic() - started) * 1000.0
                     logger.info(
-                        "%s %s -> %s in %.1fms [%s]",
+                        "%s %s -> %s in %.1fms [%s] client=%s",
                         method,
                         path,
                         message.get("status"),
                         duration_ms,
                         request_id,
+                        # Same key the rate limiter buckets on, so a 429 in
+                        # the log can be traced to the client that caused it.
+                        client_key(scope),
                     )
             await send(message)
 
@@ -120,19 +160,6 @@ class RateLimitMiddleware:
         self._hits: dict[str, deque[float]] = {}
         self._since_sweep = 0
 
-    def _client_key(self, scope: dict) -> str:
-        headers = dict(scope.get("headers") or [])
-        fwd = headers.get(b"x-forwarded-for")
-        if fwd:
-            # Key on the LAST hop: proxies append, so the leftmost entries
-            # are client-controlled — trusting them would let a caller rotate
-            # fake IPs to bypass the limiter and bloat the bucket table.
-            last = fwd.decode("latin-1").split(",")[-1].strip()
-            if last:
-                return last
-        client = scope.get("client")
-        return client[0] if client else "unknown"
-
     def _sweep(self, now: float) -> None:
         cutoff = now - self.window
         stale = [ip for ip, dq in self._hits.items() if not dq or dq[-1] < cutoff]
@@ -150,7 +177,7 @@ class RateLimitMiddleware:
             return
 
         now = time.monotonic()
-        key = self._client_key(scope)
+        key = client_key(scope)
         dq = self._hits.setdefault(key, deque())
         cutoff = now - self.window
         while dq and dq[0] <= cutoff:
@@ -166,7 +193,16 @@ class RateLimitMiddleware:
         if len(dq) >= self.limit:
             retry_after = max(1, math.ceil(dq[0] + self.window - now))
             body = json.dumps(
-                {"error": {"code": "rate_limited", "message": "too many requests"}}
+                {
+                    # Same envelope the app's exception handlers emit: legacy
+                    # "detail" plus the structured "error" object.
+                    "detail": "rate_limited",
+                    "error": {
+                        "code": "rate_limited",
+                        "message": "too many requests",
+                        "request_id": request_id_var.get(),
+                    },
+                }
             ).encode()
             await send(
                 {

@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -40,6 +39,4 @@ async def get_artifact(task_id: str) -> ArtifactResponse:
     task = state.tasks.get(task_id)
     if task is None:
         raise HTTPException(404, f"unknown task: {task_id}")
-    return ArtifactResponse(
-        artifact=task.artifact, charge_tx=task.charge_tx, proof_tx=task.proof_tx
-    )
+    return ArtifactResponse(artifact=task.artifact, charge_tx=task.charge_tx, proof_tx=task.proof_tx)

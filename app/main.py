@@ -1,32 +1,97 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.utils import is_body_allowed_for_status_code
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
+from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
-from .security import RateLimitMiddleware, RequestContextMiddleware
+from .security import (
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    RequestIdLogFilter,
+    request_id_var,
+)
 from .seed import seed_registry
+from .services import execution_svc
 from .state import state
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+
+class JsonLogFormatter(logging.Formatter):
+    """Compact single-line JSON records: ts, level, logger, msg, request_id.
+
+    Dependency-free. Tracebacks are folded into msg so a crash stays one
+    parseable line for Render's log viewer; timestamps are UTC.
+    """
+
+    @staticmethod
+    def converter(secs: float | None) -> time.struct_time:
+        return time.gmtime(secs)
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if record.exc_info:
+            msg = f"{msg}\n{self.formatException(record.exc_info)}"
+        return json.dumps(
+            {
+                "ts": f"{self.formatTime(record, '%Y-%m-%dT%H:%M:%S')}.{int(record.msecs):03d}Z",
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": msg,
+                "request_id": getattr(record, "request_id", "-"),
+            },
+            ensure_ascii=False,
+        )
+
+
+# Root logging: everything the app emits leaves as one JSON line carrying the
+# current request id. Uvicorn's own loggers keep their handlers (its access
+# and error loggers don't propagate to root), so they are unaffected.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(JsonLogFormatter())
+_log_handler.addFilter(RequestIdLogFilter())
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     seed_registry()
+    # Bound the default executor: asyncio.to_thread otherwise sizes it to
+    # min(32, cpu_count + 4) from the HOST's core count, while Render grants
+    # this container only a small CPU share — 8 threads comfortably cover the
+    # blocking Soroban SDK calls without oversubscribing the worker.
+    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="soroban")
+    asyncio.get_running_loop().set_default_executor(executor)
     yield
+    # Drain in-flight background executions: a bounded grace window to let
+    # them finish, then cancel stragglers and reap the cancellations so the
+    # process exits without "task was destroyed but it is pending" noise.
+    pending = {t for t in execution_svc._background_tasks if not t.done()}
+    if pending:
+        _done, pending = await asyncio.wait(pending, timeout=15)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+    await aclose_pdax_client()
+    executor.shutdown(wait=False)
 
 
 class SecurityHeadersMiddleware:
@@ -106,6 +171,54 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # the full middleware stack.
 app.add_middleware(RequestContextMiddleware)
 
+# Details that are already machine-readable tokens ("invalid_api_key",
+# "build_failed") are promoted to the envelope's error code as-is.
+_SNAKE_TOKEN = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+
+
+def _error_envelope(detail: Any, code: str, message: str) -> dict[str, Any]:
+    """Unified error body: the legacy FastAPI "detail" key (unchanged, so
+    existing clients keep working) plus an "error" object carrying a stable
+    snake_case code, a human message, and the request id for support."""
+    return {
+        "detail": detail,
+        "error": {"code": code, "message": message, "request_id": request_id_var.get()},
+    }
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    """Emit HTTPExceptions in the unified envelope, preserving FastAPI's
+    default semantics: same status, same headers, same "detail" value, and
+    no body at all for statuses that must not carry one (204/304)."""
+    headers = getattr(exc, "headers", None)
+    if not is_body_allowed_for_status_code(exc.status_code):
+        return Response(status_code=exc.status_code, headers=headers)
+    detail = exc.detail
+    if isinstance(detail, str) and _SNAKE_TOKEN.fullmatch(detail):
+        code, message = detail, detail.replace("_", " ")
+    else:
+        try:
+            code = HTTPStatus(exc.status_code).phrase.lower().replace(" ", "_")
+        except ValueError:
+            code = "http_error"
+        message = detail if isinstance(detail, str) else "request failed"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_envelope(jsonable_encoder(detail), code, message),
+        headers=headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Same 422 body FastAPI emits by default, plus the "error" object."""
+    return JSONResponse(
+        status_code=422,
+        content=_error_envelope(jsonable_encoder(exc.errors()), "validation_error", "request validation failed"),
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log the full traceback server-side; never leak exception text to clients."""
@@ -120,13 +233,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         "referrer-policy": "no-referrer",
         "x-frame-options": "DENY",
     }
+    # RequestContextMiddleware's send wrapper never sees this response (the
+    # exception unwound past it), so echo the id header here as well.
+    request_id = request_id_var.get()
+    if request_id != "-":
+        headers["x-request-id"] = request_id
     origin = request.headers.get("origin")
     if origin and origin in settings.cors_origin_list:
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
     return JSONResponse(
         status_code=500,
-        content={"error": {"code": "internal_error", "message": "internal server error"}},
+        content=_error_envelope("internal server error", "internal_error", "internal server error"),
         headers=headers,
     )
 

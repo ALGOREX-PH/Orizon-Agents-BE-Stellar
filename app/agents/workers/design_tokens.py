@@ -16,6 +16,7 @@ Output dict shape (consumed by code.gen and emitted in the trace):
         "counts": { "tokens": int },
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,10 +24,10 @@ import random
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 
@@ -63,7 +64,7 @@ class DesignTokens(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="design.figma",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=build_openai_chat(settings.worker_model),
             instructions=_INSTRUCTIONS,
             output_schema=_TokensOutput,
         )
@@ -114,8 +115,15 @@ class DesignTokens(Worker):
     @staticmethod
     def _css_vars(palette: dict[str, Any]) -> str:
         keys = [
-            "bg", "surface", "surface_2", "border", "text",
-            "muted", "primary", "accent", "danger",
+            "bg",
+            "surface",
+            "surface_2",
+            "border",
+            "text",
+            "muted",
+            "primary",
+            "accent",
+            "danger",
         ]
         body = "\n".join(f"  --{k.replace('_', '-')}: {palette[k]};" for k in keys)
         return ":root {\n" + body + "\n}"

@@ -7,6 +7,7 @@ check against `PDAX_WEBHOOK_SECRET`. With no secret configured it fails
 closed; local dev/smoke can opt out via PDAX_ALLOW_UNSIGNED_WEBHOOKS=true
 (leaving IP allow-listing as the trust boundary).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -24,12 +25,8 @@ from .models.webhooks import (
 )
 
 
-async def register_webhook(
-    client: PdaxClient, req: WebhookRegisterRequest
-) -> WebhookRegistration:
-    data = await client.request(
-        "POST", "pdax-institution/v1/config/webhook", json=req.model_dump()
-    )
+async def register_webhook(client: PdaxClient, req: WebhookRegisterRequest) -> WebhookRegistration:
+    data = await client.request("POST", "pdax-institution/v1/config/webhook", json=req.model_dump())
     return WebhookRegistration(**data["data"])
 
 
@@ -42,7 +39,10 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
     if not signature:
         return False
     expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    # Compare utf-8 bytes, not str: compare_digest raises TypeError on
+    # non-ASCII str input (Starlette decodes headers latin-1), which would
+    # turn a bad signature into a 500 instead of a 401.
+    return hmac.compare_digest(expected.encode(), signature.encode("utf-8", "ignore"))
 
 
 def parse_event(payload: dict) -> CryptoEvent | FiatEvent:

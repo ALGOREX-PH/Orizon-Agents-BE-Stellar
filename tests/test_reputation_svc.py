@@ -1,4 +1,5 @@
 """Unit tests for the reputation smoothing service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -67,12 +68,8 @@ def test_synthetic_rating_failed_step():
 
 
 def test_synthetic_rating_clean_artifact_beats_violations():
-    clean, _ = rep.synthetic_rating(
-        {"artifact": {"title": "x"}, "critic_violations": []}, 0.05
-    )
-    dirty, _ = rep.synthetic_rating(
-        {"artifact": {"title": "x"}, "critic_violations": ["a", "b", "c"]}, 0.05
-    )
+    clean, _ = rep.synthetic_rating({"artifact": {"title": "x"}, "critic_violations": []}, 0.05)
+    dirty, _ = rep.synthetic_rating({"artifact": {"title": "x"}, "critic_violations": ["a", "b", "c"]}, 0.05)
     assert clean == 95
     assert dirty < clean
     assert 0 <= dirty <= 100
@@ -100,9 +97,7 @@ def test_fetch_reps_returns_entry_per_agent():
 
 
 def test_info_from_state_zero_evidence_is_prior():
-    info = rep._info_from_state(
-        "agt_new", {"sum_w": 0, "weight": 0, "count": 0, "disputed": 0}
-    )
+    info = rep._info_from_state("agt_new", {"sum_w": 0, "weight": 0, "count": 0, "disputed": 0})
     assert info.source == "prior"
     assert info.smoothed_bps == settings.reputation_prior_bps
 

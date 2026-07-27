@@ -5,6 +5,7 @@ No LLM call — just fast regex/heuristic checks to catch obvious quality
 issues before returning to the user. Feeds the critic with a precise list
 of violations to fix.
 """
+
 from __future__ import annotations
 
 import re
@@ -21,10 +22,10 @@ _EXTERNAL_IMG = re.compile(
     r'<img\b[^>]*\ssrc=["\'](https?:)([^"\']+)',
     re.IGNORECASE,
 )
-_HAS_SCRIPT = re.compile(r'<script\b', re.IGNORECASE)
-_HAS_HTML = re.compile(r'<html\b', re.IGNORECASE)
-_HAS_HEAD = re.compile(r'<head\b', re.IGNORECASE)
-_HAS_BODY = re.compile(r'<body\b', re.IGNORECASE)
+_HAS_SCRIPT = re.compile(r"<script\b", re.IGNORECASE)
+_HAS_HTML = re.compile(r"<html\b", re.IGNORECASE)
+_HAS_HEAD = re.compile(r"<head\b", re.IGNORECASE)
+_HAS_BODY = re.compile(r"<body\b", re.IGNORECASE)
 _HAS_VIEWPORT = re.compile(
     r'<meta\b[^>]*\sname=["\']viewport["\']',
     re.IGNORECASE,
@@ -53,9 +54,7 @@ def validate_html(html: str) -> list[str]:
     for m in _EXTERNAL_STYLESHEET.finditer(html):
         v.append(f'external <link stylesheet href="{m.group(1)[:80]}"> — inline the CSS')
     for m in _EXTERNAL_IMG.finditer(html):
-        v.append(
-            f'external <img src="{m.group(1)}{m.group(2)[:80]}"> — use inline SVG or data URI'
-        )
+        v.append(f'external <img src="{m.group(1)}{m.group(2)[:80]}"> — use inline SVG or data URI')
 
     # Structural
     if not _HAS_HTML.search(html):
