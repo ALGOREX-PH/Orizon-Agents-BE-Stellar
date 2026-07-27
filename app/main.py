@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -21,15 +22,49 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import settings
 from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
-from .security import RateLimitMiddleware, RequestContextMiddleware, request_id_var
+from .security import (
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    RequestIdLogFilter,
+    request_id_var,
+)
 from .seed import seed_registry
 from .services import execution_svc
 from .state import state
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+
+class JsonLogFormatter(logging.Formatter):
+    """Compact single-line JSON records: ts, level, logger, msg, request_id.
+
+    Dependency-free. Tracebacks are folded into msg so a crash stays one
+    parseable line for Render's log viewer; timestamps are UTC.
+    """
+
+    converter = time.gmtime
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if record.exc_info:
+            msg = f"{msg}\n{self.formatException(record.exc_info)}"
+        return json.dumps(
+            {
+                "ts": f"{self.formatTime(record, '%Y-%m-%dT%H:%M:%S')}.{int(record.msecs):03d}Z",
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": msg,
+                "request_id": getattr(record, "request_id", "-"),
+            },
+            ensure_ascii=False,
+        )
+
+
+# Root logging: everything the app emits leaves as one JSON line carrying the
+# current request id. Uvicorn's own loggers keep their handlers (its access
+# and error loggers don't propagate to root), so they are unaffected.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(JsonLogFormatter())
+_log_handler.addFilter(RequestIdLogFilter())
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger(__name__)
 
 

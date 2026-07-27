@@ -39,6 +39,15 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+class RequestIdLogFilter(logging.Filter):
+    """Stamp every LogRecord with the current request id ("-" outside a
+    request) so formatters can correlate service logs with access lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_var.get()
+        return True
+
+
 def client_key(scope: dict) -> str:
     """Resolve the client key used for rate limiting and access logs.
 
