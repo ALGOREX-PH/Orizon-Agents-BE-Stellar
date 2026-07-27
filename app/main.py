@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -73,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     seed_registry()
     # Bound the default executor: asyncio.to_thread otherwise sizes it to
     # min(32, cpu_count + 4) from the HOST's core count, while Render grants
