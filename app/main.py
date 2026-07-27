@@ -13,9 +13,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
+from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
 from .security import RateLimitMiddleware, RequestContextMiddleware
 from .seed import seed_registry
+from .services import execution_svc
 from .state import state
 
 logging.basicConfig(
@@ -35,6 +37,17 @@ async def lifespan(_: FastAPI):
     executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="soroban")
     asyncio.get_running_loop().set_default_executor(executor)
     yield
+    # Drain in-flight background executions: a bounded grace window to let
+    # them finish, then cancel stragglers and reap the cancellations so the
+    # process exits without "task was destroyed but it is pending" noise.
+    pending = {t for t in execution_svc._background_tasks if not t.done()}
+    if pending:
+        _, pending = await asyncio.wait(pending, timeout=15)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+    await aclose_pdax_client()
     executor.shutdown(wait=False)
 
 
