@@ -33,7 +33,12 @@ async def require_api_key(
     expected = settings.api_key
     if not expected:
         return
-    if x_api_key is None or not secrets.compare_digest(x_api_key, expected):
+    # Compare utf-8 bytes, not str: compare_digest raises TypeError on
+    # non-ASCII str input (Starlette decodes headers latin-1), which would
+    # turn a bad key into a 500 instead of a 401.
+    if x_api_key is None or not secrets.compare_digest(
+        x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
