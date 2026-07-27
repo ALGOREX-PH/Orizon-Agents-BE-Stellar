@@ -43,7 +43,7 @@ class FiatDepositRequest(BaseModel):
     sender_phone_number: str | None = None
     sender_nationality: str | None = None
     sender_national_identity_number: str | None = None
-    sender_dob: str | None = Field(None, description="mm-dd-yyyy")
+    sender_dob: str | None = Field(default=None, description="mm-dd-yyyy")
     sender_place_of_birth: str | None = None
     source_of_funds: str
     sender_email: str | None = None
