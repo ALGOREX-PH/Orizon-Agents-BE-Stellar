@@ -42,7 +42,10 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
     if not signature:
         return False
     expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    # Compare utf-8 bytes, not str: compare_digest raises TypeError on
+    # non-ASCII str input (Starlette decodes headers latin-1), which would
+    # turn a bad signature into a 500 instead of a 401.
+    return hmac.compare_digest(expected.encode(), signature.encode("utf-8", "ignore"))
 
 
 def parse_event(payload: dict) -> CryptoEvent | FiatEvent:
