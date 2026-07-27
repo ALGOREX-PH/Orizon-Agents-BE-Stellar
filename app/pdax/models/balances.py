@@ -15,3 +15,9 @@ class Balance(BaseModel):
     hold: str = "0"
     total: str
     asset_type: str  # FIAT | CRYPTO
+
+
+class BalancesResponse(BaseModel):
+    """Envelope for the balances list route."""
+
+    balances: list[Balance]

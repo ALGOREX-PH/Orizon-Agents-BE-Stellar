@@ -40,6 +40,7 @@ from ..pdax import (
     withdrawals as pwd,
 )
 from ..pdax.errors import PdaxError, orizon_code
+from ..pdax.models.balances import BalancesResponse
 from ..pdax.models.common import Side
 from ..pdax.models.funding import (
     CryptoDepositAddress,
@@ -57,7 +58,11 @@ from ..pdax.models.trade import (
     OrdersResponse,
     Quote,
 )
-from ..pdax.models.webhooks import WebhookRegisterRequest
+from ..pdax.models.transactions import (
+    CryptoTransactionsResponse,
+    FiatTransactionsResponse,
+)
+from ..pdax.models.webhooks import WebhookRegisterRequest, WebhookRegistration
 from ..pdax.models.withdrawals import (
     CryptoOutRequest,
     CryptoOutResult,
@@ -288,7 +293,7 @@ async def fiat_transactions(
     identifier: str | None = None,
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
-) -> dict:
+) -> FiatTransactionsResponse:
     """Track PHP cash-in/out by mode (CashIn/CashOut) or identifier."""
     try:
         txns = await ptx.fiat_transactions(
@@ -298,7 +303,7 @@ async def fiat_transactions(
             page=page,
             page_size=page_size,
         )
-        return {"transactions": [t.model_dump() for t in txns]}
+        return FiatTransactionsResponse(transactions=txns)
     except PdaxError as e:
         raise _fail(e) from e
 
@@ -310,7 +315,7 @@ async def crypto_transactions(
     type: str | None = None,
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
-) -> dict:
+) -> CryptoTransactionsResponse:
     """Track crypto deposits/withdrawals by identifier, hash, or type."""
     try:
         txns = await ptx.crypto_transactions(
@@ -321,29 +326,28 @@ async def crypto_transactions(
             page=page,
             page_size=page_size,
         )
-        return {"transactions": [t.model_dump() for t in txns]}
+        return CryptoTransactionsResponse(transactions=txns)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── balances ────────────────────────────────────────────────────
 @secured.get("/balances")
-async def balances(currency: str | None = None) -> dict:
+async def balances(currency: str | None = None) -> BalancesResponse:
     """View balances for all assets (or a single currency)."""
     try:
         items = await pb.get_balances(get_pdax_client(), currency)
-        return {"balances": [b.model_dump() for b in items]}
+        return BalancesResponse(balances=items)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── webhooks ────────────────────────────────────────────────────
 @secured.post("/webhooks/register")
-async def webhook_register(req: WebhookRegisterRequest) -> dict:
+async def webhook_register(req: WebhookRegisterRequest) -> WebhookRegistration:
     """Register this backend's URL to receive crypto or fiat events."""
     try:
-        reg = await pw.register_webhook(get_pdax_client(), req)
-        return reg.model_dump()
+        return await pw.register_webhook(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 

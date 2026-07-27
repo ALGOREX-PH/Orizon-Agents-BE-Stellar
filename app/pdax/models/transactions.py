@@ -34,6 +34,12 @@ class FiatTransaction(BaseModel):
     retried_methods: list[RetryMethod] = Field(default_factory=list)
 
 
+class FiatTransactionsResponse(BaseModel):
+    """Envelope for the fiat transaction-history list route."""
+
+    transactions: list[FiatTransaction]
+
+
 class CryptoTransaction(BaseModel):
     """One crypto deposit/withdrawal record."""
 
@@ -56,3 +62,9 @@ class CryptoTransaction(BaseModel):
     receiver_wallet_address: str | None = None
     receiver_wallet_address_tag: str | None = None
     identifier: str | None = None
+
+
+class CryptoTransactionsResponse(BaseModel):
+    """Envelope for the crypto transaction-history list route."""
+
+    transactions: list[CryptoTransaction]
