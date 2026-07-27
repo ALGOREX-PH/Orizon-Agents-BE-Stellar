@@ -29,6 +29,7 @@ from stellar_sdk import (
     TransactionBuilder,
     scval,
 )
+from stellar_sdk.client.requests_client import RequestsClient
 from stellar_sdk.exceptions import PrepareTransactionException
 from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
 
@@ -79,10 +80,17 @@ def _server() -> SorobanServer:
     across worker threads is therefore unsafe, so we cache one per thread:
     asyncio.to_thread reuses a small executor pool, so each thread still keeps
     its TCP+TLS connections alive across calls.
+
+    Explicit client timeouts: the SDK default (post_timeout 33s × 3 retries
+    ≈ 99s worst case) can pin asyncio.to_thread workers for minutes when RPC
+    misbehaves; cap each call at 15s with a single retry instead.
     """
     server = getattr(_thread_local, "server", None)
     if server is None:
-        server = SorobanServer(settings.stellar_rpc_url)
+        server = SorobanServer(
+            settings.stellar_rpc_url,
+            client=RequestsClient(request_timeout=8, post_timeout=15, num_retries=1),
+        )
         _thread_local.server = server
     return server
 
