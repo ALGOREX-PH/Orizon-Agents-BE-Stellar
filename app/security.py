@@ -22,6 +22,7 @@ import contextvars
 import json
 import logging
 import math
+import re
 import secrets
 import time
 import uuid
@@ -40,6 +41,20 @@ EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
 # Current request's id — set by RequestContextMiddleware, readable from any
 # code running in the request's task context (error handlers, log records).
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+# Credential-bearing query values (the SSE routes take `?token=`) must not
+# reach the access log; only the parameter name survives.
+_TOKEN_QUERY_RE = re.compile(r"(^|&)([^&=]*token)=[^&]*")
+
+
+def _redacted_target(scope: dict) -> str:
+    """Path plus query string, with any `*token=` values masked for logging."""
+    path = scope.get("path", "-")
+    query = (scope.get("query_string") or b"").decode("latin-1")
+    if not query:
+        return str(path)
+    return f"{path}?{_TOKEN_QUERY_RE.sub(r'\1\2=***', query)}"
 
 
 class RequestIdLogFilter(logging.Filter):
@@ -128,7 +143,10 @@ class RequestContextMiddleware:
                     logger.info(
                         "%s %s -> %s in %.1fms [%s] client=%s",
                         method,
-                        path,
+                        # Path + query with token values masked: SSE auth
+                        # tokens ride in the query string and must not be
+                        # recoverable from logs.
+                        _redacted_target(scope),
                         message.get("status"),
                         duration_ms,
                         request_id,

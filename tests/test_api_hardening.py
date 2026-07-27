@@ -244,6 +244,30 @@ def test_openapi_documents_error_envelope(client):
             assert ref.endswith("ErrorEnvelope"), (path, status)
 
 
+def test_access_log_redacts_token_query_value(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        r = client.get("/api/agents?token=supersecret&foo=1")
+    assert r.status_code == 200
+    lines = [
+        rec.getMessage() for rec in caplog.records if rec.name == "app.security" and "/api/agents" in rec.getMessage()
+    ]
+    assert lines, "expected an access log line"
+    joined = "\n".join(lines)
+    assert "supersecret" not in joined
+    assert "token=***" in joined
+    assert "foo=1" in joined
+
+
+def test_redacted_target_masks_every_token_param():
+    from app.security import _redacted_target
+
+    scope = {"path": "/api/trace/stream", "query_string": b"token=abc&access_token=def&x=1"}
+    assert _redacted_target(scope) == "/api/trace/stream?token=***&access_token=***&x=1"
+    assert _redacted_target({"path": "/api/agents", "query_string": b""}) == "/api/agents"
+
+
 def test_security_headers_on_api_response(client):
     r = client.get("/api/agents")
     assert r.status_code == 200
