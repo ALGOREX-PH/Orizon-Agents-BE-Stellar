@@ -138,7 +138,7 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
     """Read an Agent from AgentRegistry.get(id)."""
     try:
 
-        async def _fetch():
+        async def _fetch() -> Any:
             return await asyncio.to_thread(
                 sc.simulate_read,
                 sc.contract_ids().agent_registry,
@@ -211,7 +211,7 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
         if len(jid) != 16:
             raise ValueError("job_id must be 32 hex chars (16 bytes)")
 
-        async def _fetch():
+        async def _fetch() -> Any:
             return await asyncio.to_thread(
                 sc.simulate_read,
                 sc.contract_ids().attestation_registry,
