@@ -8,19 +8,25 @@ Lightweight, dependency-free hardening primitives.
   pure ASGI middleware (no external deps). Window/limit come from settings;
   liveness paths and CORS preflights are exempt. Rate-limited responses
   carry `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers.
+- `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
+  INFO access log per request (method, path, status, duration, id).
 """
 from __future__ import annotations
 
 import json
+import logging
 import math
 import secrets
 import time
+import uuid
 from collections import deque
 from typing import Any, Optional
 
 from fastapi import Header, HTTPException
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 # Paths that must never be throttled (probes + root ping).
 EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
@@ -40,6 +46,55 @@ async def require_api_key(
         x_api_key.encode("utf-8", "ignore"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="invalid_api_key")
+
+
+class RequestContextMiddleware:
+    """Request-id + access-log middleware (pure ASGI, no external deps).
+
+    Takes the caller's `X-Request-ID` (or generates a short one), echoes it
+    on the response so clients can quote it, and logs one INFO line per
+    request — method, path, status, duration, id — so any response can be
+    correlated with server logs. Probe paths (EXEMPT_PATHS) still get the
+    header but are not logged, to keep the log free of health-check noise.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        request_id = (
+            (headers.get(b"x-request-id") or b"").decode("latin-1").strip()[:64]
+        )
+        if not request_id:
+            request_id = uuid.uuid4().hex[:16]
+
+        method = scope.get("method", "-")
+        path = scope.get("path", "-")
+        started = time.monotonic()
+
+        async def send_with_context(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers") or []) + [
+                    (b"x-request-id", request_id.encode("latin-1")),
+                ]
+                if path not in EXEMPT_PATHS:
+                    duration_ms = (time.monotonic() - started) * 1000.0
+                    logger.info(
+                        "%s %s -> %s in %.1fms [%s]",
+                        method,
+                        path,
+                        message.get("status"),
+                        duration_ms,
+                        request_id,
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_with_context)
 
 
 class RateLimitMiddleware:

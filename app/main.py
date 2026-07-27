@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .config import settings
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
-from .security import RateLimitMiddleware
+from .security import RateLimitMiddleware, RequestContextMiddleware
 from .seed import seed_registry
 
 logging.basicConfig(
@@ -87,6 +87,11 @@ app.add_middleware(
 # Added last → runs outermost, so artifact/trace payloads (30–76 kB) leave the
 # stack compressed while the rate limiter still sees the raw request.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# Outermost of all: every response — including 429s from the limiter and
+# CORS rejections — carries an X-Request-ID, and the logged duration covers
+# the full middleware stack.
+app.add_middleware(RequestContextMiddleware)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
