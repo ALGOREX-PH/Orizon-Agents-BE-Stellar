@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ..schemas import Task
@@ -23,7 +23,7 @@ class ArtifactResponse(BaseModel):
 
 
 @router.get("/tasks", response_model=list[Task])
-async def list_tasks(limit: int = 20) -> list[Task]:
+async def list_tasks(limit: int = Query(20, ge=1, le=200)) -> list[Task]:
     return state.recent_tasks(limit=limit)
 
 
