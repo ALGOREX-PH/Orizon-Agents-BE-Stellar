@@ -321,7 +321,10 @@ async def webhook_receive(request: Request) -> dict:
     event = pw.parse_event(payload)
     # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
     # crypto deposit → sell → fiat withdraw).
-    advanced = await pr.handle_event(get_pdax_client(), event)
+    try:
+        advanced = await pr.handle_event(get_pdax_client(), event)
+    except PdaxError as e:
+        raise _fail(e) from e
     return {
         "received": True,
         "event": event.model_dump(),
@@ -412,7 +415,10 @@ async def ramp_funding_quote(usdc: str) -> dict:
 async def ramp_onramp(req: OnRampRequest) -> dict:
     """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
     settlement is completed by the fiat-deposit webhook."""
-    record = await pr.start_onramp(get_pdax_client(), req)
+    try:
+        record = await pr.start_onramp(get_pdax_client(), req)
+    except PdaxError as e:
+        raise _fail(e) from e
     return record.model_dump()
 
 
@@ -420,7 +426,10 @@ async def ramp_onramp(req: OnRampRequest) -> dict:
 async def ramp_offramp(req: OffRampRequest) -> dict:
     """Start a USDCXLM → PHP ramp. Returns a deposit address for the agent to
     send USDC to; settlement is completed by the crypto-deposit webhook."""
-    record = await pr.start_offramp(get_pdax_client(), req)
+    try:
+        record = await pr.start_offramp(get_pdax_client(), req)
+    except PdaxError as e:
+        raise _fail(e) from e
     return record.model_dump()
 
 
