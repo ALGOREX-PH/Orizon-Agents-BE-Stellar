@@ -21,6 +21,10 @@ class AppState:
     def __init__(self) -> None:
         self.agents: dict[str, Agent] = {}
         self.tasks: dict[str, Task] = {}
+        # Per-task capability read tokens, minted at execute. Kept OFF the
+        # Task model (it is a response shape — a token field would leak) and
+        # evicted in lockstep with tasks/traces below.
+        self.task_tokens: dict[str, str] = {}
         self.task_order: deque[str] = deque(maxlen=200)
         self.traces: dict[str, list[TraceLine]] = {}
         self.plans: dict[str, StoredPlan] = {}
@@ -42,6 +46,7 @@ class AppState:
         if evicted is not None and evicted != task.id:
             self.tasks.pop(evicted, None)
             self.traces.pop(evicted, None)
+            self.task_tokens.pop(evicted, None)
 
     def add_plan(self, plan: StoredPlan) -> None:
         evicted = self.plan_order[-1] if len(self.plan_order) == self.plan_order.maxlen else None
