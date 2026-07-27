@@ -8,8 +8,6 @@ All endpoint paths are versioned under `/pdax-institution/v1` (a few under
 """
 from __future__ import annotations
 
-import os
-
 from ..config import settings
 
 # Base URLs per environment (see PDAX "Getting Started").
@@ -40,8 +38,6 @@ def allow_unsigned_webhooks() -> bool:
     """Escape hatch for local dev/smoke: accept inbound webhooks without a
     signature when `PDAX_WEBHOOK_SECRET` is unset. Defaults to false, so
     webhook verification fails closed. Set PDAX_ALLOW_UNSIGNED_WEBHOOKS=true
-    to opt out (never in production)."""
-    val = getattr(settings, "pdax_allow_unsigned_webhooks", None)
-    if val is None:
-        val = os.getenv("PDAX_ALLOW_UNSIGNED_WEBHOOKS", "")
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+    (declared on Settings, so it is validated with the rest of the config)
+    to opt out — never in production."""
+    return bool(getattr(settings, "pdax_allow_unsigned_webhooks", False))
