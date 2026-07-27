@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
@@ -25,7 +26,7 @@ async def get_trace(task_id: str) -> list[TraceLine]:
     return state.traces.get(task_id, [])
 
 
-def _replay_events(task_id: str):
+def _replay_events(task_id: str) -> Iterator[dict[str, str]]:
     for line in state.traces.get(task_id, []):
         yield {"event": "trace", "data": line.model_dump_json()}
 
@@ -55,7 +56,7 @@ async def stream_trace(task_id: str) -> EventSourceResponse:
         # Finished (or never started) — replay history and end the stream.
         # No subscription: no producer exists, so a live queue would only
         # ping forever and leak.
-        async def replay():
+        async def replay() -> AsyncIterator[dict[str, str]]:
             for event in _replay_events(task_id):
                 yield event
             yield {"event": "done", "data": "{}"}
@@ -64,7 +65,7 @@ async def stream_trace(task_id: str) -> EventSourceResponse:
 
     queue = bus.subscribe(task_id)
 
-    async def generator():
+    async def generator() -> AsyncIterator[dict[str, str]]:
         try:
             # Replay anything already recorded so late subscribers see full history.
             for event in _replay_events(task_id):
