@@ -124,7 +124,7 @@ async def _run(
             "exec",
             f"orchestrator: decompose → [{', '.join(s.agent_id for s in plan.plan.steps)}]",
         )
-        if onchain:
+        if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
             await _emit(
                 task_id,
                 start,
@@ -211,7 +211,7 @@ async def _run(
             if isinstance(output, dict):
                 context[worker.name] = output
 
-        if onchain:
+        if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
             charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
@@ -327,7 +327,7 @@ async def _settle_onchain(
             ],
         )
         charge_tx = charge.get("hash")
-        if charge.get("status") == "SUCCESS":
+        if charge.get("status") == "SUCCESS" and charge_tx:
             settled_job_id = job_id
             await _emit(
                 task_id,
@@ -369,7 +369,7 @@ async def _settle_onchain(
             ],
         )
         proof_tx = seal.get("hash")
-        if seal.get("status") == "SUCCESS":
+        if seal.get("status") == "SUCCESS" and proof_tx:
             await _emit(
                 task_id,
                 start,
