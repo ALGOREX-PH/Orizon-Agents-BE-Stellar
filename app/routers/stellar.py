@@ -199,7 +199,7 @@ async def read_reputation(
     read with Bayesian prior smoothing; prior fallback on any failure.
     """
     info = await reputation_svc.fetch_rep(agent_id)
-    return info.model_dump()
+    return ReputationInfo(**info.model_dump())
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
