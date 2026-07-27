@@ -2,18 +2,27 @@
 In-memory ramp store.
 
 Holds `RampRecord`s for the lifetime of the process (mirrors the app's other
-in-memory state). A production deployment would back this with a database so
-ramps survive restarts and can be reconciled against PDAX webhooks.
+in-memory state). Retention is bounded like app/state.py: the store is
+insertion-ordered with a hard cap — when full, the oldest TERMINAL
+(completed/failed) ramp is evicted first, falling back to the oldest overall,
+and the matching per-ramp lock (and any payout stash) goes with it. A
+production deployment would back this with a database so ramps survive
+restarts and can be reconciled against PDAX webhooks.
 """
 from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 from .models.ramp import RampRecord, RampStage
 
-_ramps: dict[str, RampRecord] = {}
+# Retention cap for tracked ramps (insertion-ordered eviction, see save()).
+_MAX_RAMPS = 500
+_TERMINAL = frozenset({"completed", "failed"})
+
+_ramps: OrderedDict[str, RampRecord] = OrderedDict()
 _locks: dict[str, asyncio.Lock] = {}
 
 
@@ -35,8 +44,27 @@ def now_iso() -> str:
 
 
 def save(record: RampRecord) -> RampRecord:
+    if record.ramp_id not in _ramps and len(_ramps) >= _MAX_RAMPS:
+        _evict_one()
     _ramps[record.ramp_id] = record
     return record
+
+
+def _evict_one() -> None:
+    """Drop one ramp to make room: the oldest terminal (completed/failed) one,
+    or — if every ramp is somehow still in flight — the oldest overall, so the
+    store can never exceed its cap."""
+    victim = next(
+        (rid for rid, r in _ramps.items() if r.status in _TERMINAL),
+        next(iter(_ramps)),
+    )
+    _ramps.pop(victim, None)
+    _locks.pop(victim, None)
+    # Late import (ramp imports this module) — an evicted in-flight off-ramp
+    # must not leave its payout PII stranded in the stash.
+    from . import ramp
+
+    ramp._PAYOUTS.pop(victim, None)
 
 
 def get(ramp_id: str) -> RampRecord | None:
