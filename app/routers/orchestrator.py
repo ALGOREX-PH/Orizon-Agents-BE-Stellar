@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
 
-@router.post("/decompose", response_model=DecomposeResponse)
+@router.post("/decompose", response_model=DecomposeResponse, summary="Decompose an intent into a plan")
 async def orchestrator_decompose(req: DecomposeRequest) -> DecomposeResponse:
     try:
         return await decompose(req.intent)
@@ -26,7 +26,7 @@ async def orchestrator_decompose(req: DecomposeRequest) -> DecomposeResponse:
         raise HTTPException(502, "decompose_failed") from e
 
 
-@router.post("/execute", response_model=ExecuteResponse)
+@router.post("/execute", response_model=ExecuteResponse, summary="Execute a stored plan")
 async def orchestrator_execute(req: ExecuteRequest) -> ExecuteResponse:
     plan = state.plans.get(req.plan_id)
     if plan is None:
