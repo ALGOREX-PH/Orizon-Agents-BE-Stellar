@@ -169,3 +169,32 @@ def test_security_headers_on_api_response(client):
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["referrer-policy"] == "no-referrer"
     assert r.headers["x-frame-options"] == "DENY"
+
+
+def test_security_headers_on_429():
+    from app.main import SecurityHeadersMiddleware
+
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    # Same composition the app registers: the header middleware wrapping the
+    # limiter, so its 429 short-circuits pick up the hardening headers.
+    inner = Starlette(routes=[Route("/hit", ok)])
+    limited = TestClient(SecurityHeadersMiddleware(RateLimitMiddleware(inner, limit=1, window_seconds=60)))
+
+    assert limited.get("/hit").status_code == 200
+    blocked = limited.get("/hit")
+    assert blocked.status_code == 429
+    assert blocked.headers["x-content-type-options"] == "nosniff"
+    assert blocked.headers["referrer-policy"] == "no-referrer"
+    assert blocked.headers["x-frame-options"] == "DENY"
+
+
+def test_app_orders_header_middleware_outside_limiter():
+    from app.main import app
+
+    names = [m.cls.__name__ for m in app.user_middleware]  # outermost first
+    assert names.index("SecurityHeadersMiddleware") < names.index("RateLimitMiddleware")
+    assert names.index("RateLimitMiddleware") < names.index("BodyLimitMiddleware")
+    # Request-id context is outermost, so 413/429 short-circuits carry it.
+    assert names.index("RequestContextMiddleware") == 0

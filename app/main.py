@@ -147,12 +147,14 @@ app = FastAPI(
 # layers wrapping it.
 app.add_middleware(BodyLimitMiddleware)
 
-# Hardening headers land on every response leaving the layers below.
-app.add_middleware(SecurityHeadersMiddleware)
-
 # Registered before CORS so CORS wraps it and 429 responses still carry
 # the Access-Control-Allow-Origin header the browser needs to read them.
 app.add_middleware(RateLimitMiddleware)
+
+# Wraps the rate limiter (and everything inside it), so the limiter's 429
+# short-circuits — and the body limiter's 413s — carry the hardening
+# headers too, not just responses that reached the router.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # This project's Vercel production/preview origins only — a broad
 # `.*\.vercel\.app` would let ANY hosted Vercel page drive the
