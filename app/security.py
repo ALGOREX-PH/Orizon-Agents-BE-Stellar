@@ -33,7 +33,7 @@ EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
 
 
 async def require_api_key(
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> None:
     """No-op unless API_KEY is configured; then enforce the X-API-Key header."""
     expected = settings.api_key
@@ -111,7 +111,7 @@ class RateLimitMiddleware:
     def __init__(
         self,
         app: Any,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         window_seconds: float = 60.0,
     ) -> None:
         self.app = app

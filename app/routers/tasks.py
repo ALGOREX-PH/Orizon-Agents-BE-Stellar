@@ -17,9 +17,9 @@ class ArtifactResponse(BaseModel):
     the code viewer), plus the on-chain charge/proof transaction hashes.
     """
 
-    artifact: Optional[dict] = None
-    charge_tx: Optional[str] = None
-    proof_tx: Optional[str] = None
+    artifact: dict | None = None
+    charge_tx: str | None = None
+    proof_tx: str | None = None
 
 
 @router.get("/tasks", response_model=list[Task])

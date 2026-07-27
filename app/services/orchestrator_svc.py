@@ -40,7 +40,7 @@ _KIT_ETAS: dict[str, float] = {
 }
 
 
-def _rep_fields(info: Optional[reputation_svc.RepInfo]) -> dict[str, Any]:
+def _rep_fields(info: reputation_svc.RepInfo | None) -> dict[str, Any]:
     """PlanStep reputation stamp — empty when the agent has no rep entry."""
     if info is None:
         return {}

@@ -62,8 +62,8 @@ def _summarize(output: dict) -> str:
 async def execute_plan(
     plan: StoredPlan,
     *,
-    auth_id_hex: Optional[str] = None,
-    payer: Optional[str] = None,
+    auth_id_hex: str | None = None,
+    payer: str | None = None,
 ) -> str:
     """Kicks off execution in the background. Returns the new task_id.
 
@@ -92,12 +92,12 @@ async def _run(
     plan: StoredPlan,
     task_id: str,
     *,
-    auth_id_hex: Optional[str] = None,
-    payer: Optional[str] = None,
+    auth_id_hex: str | None = None,
+    payer: str | None = None,
 ) -> None:
     start = time.monotonic()
     spent = 0.0
-    last_artifact: Optional[dict] = None
+    last_artifact: dict | None = None
     onchain = bool(auth_id_hex and payer)
 
     # Accumulate prior step outputs so later steps can build on them.
@@ -210,8 +210,8 @@ async def _run(
             if isinstance(output, dict):
                 context[worker.name] = output
 
-        charge_tx: Optional[str] = None
-        proof_tx: Optional[str] = None
+        charge_tx: str | None = None
+        proof_tx: str | None = None
 
         if onchain:
             charge_tx, proof_tx, job_id = await _settle_onchain(
@@ -258,7 +258,7 @@ async def _settle_onchain(
     payer: str,
     auth_id_hex: str,
     total_usdc: float,
-) -> tuple[Optional[str], Optional[str], Optional[bytes]]:
+) -> tuple[str | None, str | None, bytes | None]:
     """Perform the real PaymentEscrow.charge + AttestationRegistry.seal calls.
 
     Returns (charge_tx, proof_tx, job_id); either tx may be None if that step
@@ -268,9 +268,9 @@ async def _settle_onchain(
 
     from ..stellar import client as sc
 
-    charge_tx: Optional[str] = None
-    proof_tx: Optional[str] = None
-    settled_job_id: Optional[bytes] = None
+    charge_tx: str | None = None
+    proof_tx: str | None = None
+    settled_job_id: bytes | None = None
 
     if not settings.stellar_signing_key:
         await _emit(

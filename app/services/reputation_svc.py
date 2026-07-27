@@ -94,7 +94,7 @@ def lower_bound_bps(mean_bps: int, weight: int) -> int:
     return max(0, min(10_000, round(lb * 10_000)))
 
 
-def passes_floor(info: Optional[RepInfo]) -> bool:
+def passes_floor(info: RepInfo | None) -> bool:
     """Routing-floor check on the conservative lower bound."""
     if info is None:
         return True
@@ -108,7 +108,7 @@ def rating_weight_stroops(step_price_usdc: float) -> int:
 
 
 def synthetic_rating(
-    step_output: Optional[dict[str, Any]],
+    step_output: dict[str, Any] | None,
     step_price_usdc: float,
 ) -> tuple[int, int]:
     """Derive the settler's synthetic rating for one settled step.

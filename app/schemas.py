@@ -30,9 +30,9 @@ class Task(BaseModel):
     spent: float
     status: TaskStatus
     started: str  # human-readable ("2m ago")
-    artifact: Optional[dict] = None
-    charge_tx: Optional[str] = None
-    proof_tx: Optional[str] = None
+    artifact: dict | None = None
+    charge_tx: str | None = None
+    proof_tx: str | None = None
 
 
 # ───── Artifacts ──────────────────────────────────────────
@@ -53,12 +53,12 @@ class CodeArtifact(BaseModel):
 # ───── Plans ───────────────────────────────────────────────
 class PlanStep(BaseModel):
     agent_id: str = Field(..., description="Must match a registered agent id")
-    agent_name: Optional[str] = None  # backfilled server-side
+    agent_name: str | None = None  # backfilled server-side
     rationale: str = Field(..., description="<= 20 words")
     est_price_usdc: float = Field(..., ge=0)
     est_eta_seconds: float = Field(..., ge=0)
-    rep_bps: Optional[int] = None          # smoothed reputation at plan time (0..10_000)
-    rep_source: Optional[Literal["onchain", "prior"]] = None
+    rep_bps: int | None = None          # smoothed reputation at plan time (0..10_000)
+    rep_source: Literal["onchain", "prior"] | None = None
 
 
 class Plan(BaseModel):
@@ -122,10 +122,10 @@ class DecomposeResponse(BaseModel):
 
 class ExecuteRequest(BaseModel):
     plan_id: str = Field(..., max_length=64)
-    auth_id_hex: Optional[str] = Field(
+    auth_id_hex: str | None = Field(
         default=None, pattern=r"^[0-9a-fA-F]{32}$"
     )  # 32-hex auth id from PaymentEscrow.authorize
-    payer: Optional[str] = Field(
+    payer: str | None = Field(
         default=None, pattern=r"^G[A-Z2-7]{55}$"
     )  # G... address of the payer (from Freighter)
 
@@ -143,4 +143,4 @@ class X402Request(BaseModel):
 
 class X402Response(BaseModel):
     status: Literal["402", "paid"]
-    receipt: Optional[str] = None
+    receipt: str | None = None
