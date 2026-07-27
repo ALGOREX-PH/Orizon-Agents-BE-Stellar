@@ -97,9 +97,24 @@ app.add_middleware(RequestContextMiddleware)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Log the full traceback server-side; never leak exception text to clients."""
     logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    # This handler runs on the OUTERMOST layer (ServerErrorMiddleware), so the
+    # security-header, rate-limit, and CORS middleware never see the response.
+    # Stamp the hardening headers — and the CORS header for known origins —
+    # by hand, or browsers report an opaque CORS failure instead of letting
+    # the frontend read this JSON envelope.
+    headers = {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "x-frame-options": "DENY",
+    }
+    origin = request.headers.get("origin")
+    if origin and origin in settings.cors_origin_list:
+        headers["access-control-allow-origin"] = origin
+        headers["vary"] = "Origin"
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "internal_error", "message": "internal server error"}},
+        headers=headers,
     )
 
 
