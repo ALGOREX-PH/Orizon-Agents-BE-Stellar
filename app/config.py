@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     orchestrator_model: str = "gpt-4o-mini"
     worker_model: str = "gpt-4o-mini"
+    # Per-request HTTP timeout handed to the OpenAI client (its own default
+    # is 600 s per attempt — far too long for an interactive API).
+    llm_timeout_seconds: float = 120.0
+    # End-to-end budget for one decompose LLM call (asyncio.wait_for bound;
+    # the router maps a breach to HTTP 504 "decompose_timeout").
+    decompose_timeout_seconds: float = 90.0
 
     # ── Code-generation quality dials (code.gen + code.critic) ─
     # Higher reasoning = better artifacts, more latency + cost.
