@@ -290,7 +290,7 @@ async def build_authorize(req: AuthorizeReq) -> AuthorizeXdrResponse:
             args,
             source=req.payer,
         )
-        return {"xdr": xdr, "expires_at": expires_at}
+        return AuthorizeXdrResponse(xdr=xdr, expires_at=expires_at)
     except Exception as e:
         logger.exception("authorize build failed")
         raise HTTPException(400, "build_failed") from e
