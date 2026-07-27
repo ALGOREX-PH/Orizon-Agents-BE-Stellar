@@ -259,7 +259,7 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
             args,
             source=req.owner,
         )
-        return {"xdr": xdr}
+        return XdrResponse(xdr=xdr)
     except Exception as e:
         logger.exception("register-agent build failed")
         raise HTTPException(400, "build_failed") from e
