@@ -41,7 +41,11 @@ from ..pdax import (
 )
 from ..pdax.errors import PdaxError, orizon_code
 from ..pdax.models.common import Side
-from ..pdax.models.funding import FiatDepositRequest
+from ..pdax.models.funding import (
+    CryptoDepositAddress,
+    FiatDepositRequest,
+    FiatDepositResult,
+)
 from ..pdax.models.ramp import OffRampRequest, OnRampRequest, _positive_decimal_str
 from ..pdax.models.trade import (
     FirmQuoteRequest,
@@ -54,7 +58,12 @@ from ..pdax.models.trade import (
     Quote,
 )
 from ..pdax.models.webhooks import WebhookRegisterRequest
-from ..pdax.models.withdrawals import CryptoOutRequest, FiatWithdrawRequest
+from ..pdax.models.withdrawals import (
+    CryptoOutRequest,
+    CryptoOutResult,
+    FiatWithdrawRequest,
+    FiatWithdrawResult,
+)
 from ..security import require_api_key
 
 router = APIRouter(prefix="/pdax", tags=["pdax"])
@@ -227,52 +236,47 @@ async def trade_orders(
 
 # ── funding (deposits) ──────────────────────────────────────────
 @secured.get("/crypto/deposit")
-async def crypto_deposit(currency: str) -> dict:
+async def crypto_deposit(currency: str) -> CryptoDepositAddress:
     """Wallet address to deposit a crypto token, e.g. currency=USDCXLM."""
     try:
-        addr = await pf.crypto_deposit_address(get_pdax_client(), currency)
-        return addr.model_dump()
+        return await pf.crypto_deposit_address(get_pdax_client(), currency)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/fiat/deposit")
-async def fiat_deposit(req: FiatDepositRequest) -> dict:
+async def fiat_deposit(req: FiatDepositRequest) -> FiatDepositResult:
     """Initiate a PHP cash-in; returns a payment_checkout_url."""
     try:
-        result = await pf.fiat_deposit(get_pdax_client(), req)
-        return result.model_dump()
+        return await pf.fiat_deposit(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 # ── withdrawals ─────────────────────────────────────────────────
 @secured.post("/fiat/withdraw")
-async def fiat_withdraw(req: FiatWithdrawRequest) -> dict:
+async def fiat_withdraw(req: FiatWithdrawRequest) -> FiatWithdrawResult:
     """Withdraw PHP to a bank / e-wallet beneficiary."""
     try:
-        result = await pwd.fiat_withdraw(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.fiat_withdraw(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/fiat/user-info-upload")
-async def fiat_user_info_upload(req: FiatWithdrawRequest) -> dict:
+async def fiat_user_info_upload(req: FiatWithdrawRequest) -> FiatWithdrawResult:
     """Upload sender/beneficiary travel-rule data for a fiat withdrawal."""
     try:
-        result = await pwd.user_info_upload(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.user_info_upload(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
 
 @secured.post("/crypto/withdraw")
-async def crypto_withdraw(req: CryptoOutRequest) -> dict:
+async def crypto_withdraw(req: CryptoOutRequest) -> CryptoOutResult:
     """Send a crypto token to an external address (e.g. USDCXLM)."""
     try:
-        result = await pwd.crypto_out(get_pdax_client(), req)
-        return result.model_dump()
+        return await pwd.crypto_out(get_pdax_client(), req)
     except PdaxError as e:
         raise _fail(e) from e
 
