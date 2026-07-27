@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -13,6 +14,7 @@ from .config import settings
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
 from .security import RateLimitMiddleware, RequestContextMiddleware
 from .seed import seed_registry
+from .state import state
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,9 +137,13 @@ async def root() -> dict[str, str]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, Any]:
     """Liveness probe — process is up and serving."""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "version": app.version,
+        "uptime_seconds": round(time.time() - state.started_at, 1),
+    }
 
 
 @app.get("/readiness")
