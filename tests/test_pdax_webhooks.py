@@ -1,11 +1,23 @@
-"""PDAX webhook receiver: signature verification edge cases."""
+"""PDAX webhook receiver: signature verification edge cases, the HMAC accept
+path, and claim_event idempotency."""
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import uuid
+
+import pytest
 
 from app.config import settings
 from app.pdax import webhooks as pw
+
+
+@pytest.fixture(autouse=True)
+def clean_seen_events():
+    pw._seen_events.clear()
+    yield
+    pw._seen_events.clear()
 
 
 def _sign(secret: str, body: bytes) -> str:
@@ -68,3 +80,82 @@ def test_allow_unsigned_webhooks_defaults_false():
     from app.pdax import config as pdax_config
 
     assert pdax_config.allow_unsigned_webhooks() is False
+
+
+def _crypto_payload() -> dict:
+    return {
+        "identifier": f"wh-{uuid.uuid4().hex[:8]}",
+        "user_id": "u1",
+        "transaction_type": "DEPOSIT",
+        "amount": 5.0,
+        "asset": "USDCXLM",
+        "asset_type": "crypto",
+        "destination_address": "GNOMATCH",
+        "status": "completed",
+    }
+
+
+def _post_signed(client, payload: dict):
+    body = json.dumps(payload).encode()
+    return client.post(
+        "/api/pdax/webhooks/receive",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-pdax-signature": _sign("s3cret", body),
+        },
+    )
+
+
+def test_valid_hmac_accepts_and_parses_event(client, monkeypatch):
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    payload = _crypto_payload()
+    r = _post_signed(client, payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["received"] is True
+    assert body["event"]["asset"] == "USDCXLM"
+    assert body["event"]["amount"] == 5.0
+    assert body["ramp"] is None  # no waiting ramp matched
+
+
+def test_duplicate_delivery_is_rejected_idempotently(client, monkeypatch):
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    payload = _crypto_payload()
+    first = _post_signed(client, payload)
+    assert first.status_code == 200
+    assert "duplicate" not in first.json()
+    second = _post_signed(client, payload)
+    assert second.status_code == 200
+    assert second.json() == {"received": True, "duplicate": True}
+
+
+def test_bad_json_with_valid_signature_is_400(client, monkeypatch):
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    raw = b"not-json"
+    r = client.post(
+        "/api/pdax/webhooks/receive",
+        content=raw,
+        headers={
+            "content-type": "application/json",
+            "x-pdax-signature": _sign("s3cret", raw),
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_claim_event_second_claim_rejected():
+    key = f"k-{uuid.uuid4().hex}"
+    assert pw.claim_event(key) is True
+    assert pw.claim_event(key) is False
+
+
+def test_claim_event_bounded():
+    for i in range(pw._SEEN_EVENTS_MAX + 50):
+        pw.claim_event(f"bulk-{i}")
+    assert len(pw._seen_events) == pw._SEEN_EVENTS_MAX
+    # Oldest keys were evicted, newest kept.
+    assert "bulk-0" not in pw._seen_events
+    assert f"bulk-{pw._SEEN_EVENTS_MAX + 49}" in pw._seen_events
