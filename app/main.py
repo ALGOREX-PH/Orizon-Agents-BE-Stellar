@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.utils import is_body_allowed_for_status_code
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
 from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
-from .security import RateLimitMiddleware, RequestContextMiddleware
+from .security import RateLimitMiddleware, RequestContextMiddleware, request_id_var
 from .seed import seed_registry
 from .services import execution_svc
 from .state import state
@@ -127,6 +133,56 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # CORS rejections — carries an X-Request-ID, and the logged duration covers
 # the full middleware stack.
 app.add_middleware(RequestContextMiddleware)
+
+# Details that are already machine-readable tokens ("invalid_api_key",
+# "build_failed") are promoted to the envelope's error code as-is.
+_SNAKE_TOKEN = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+
+
+def _error_envelope(detail: Any, code: str, message: str) -> dict[str, Any]:
+    """Unified error body: the legacy FastAPI "detail" key (unchanged, so
+    existing clients keep working) plus an "error" object carrying a stable
+    snake_case code, a human message, and the request id for support."""
+    return {
+        "detail": detail,
+        "error": {"code": code, "message": message, "request_id": request_id_var.get()},
+    }
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    """Emit HTTPExceptions in the unified envelope, preserving FastAPI's
+    default semantics: same status, same headers, same "detail" value, and
+    no body at all for statuses that must not carry one (204/304)."""
+    headers = getattr(exc, "headers", None)
+    if not is_body_allowed_for_status_code(exc.status_code):
+        return Response(status_code=exc.status_code, headers=headers)
+    detail = exc.detail
+    if isinstance(detail, str) and _SNAKE_TOKEN.fullmatch(detail):
+        code, message = detail, detail.replace("_", " ")
+    else:
+        try:
+            code = HTTPStatus(exc.status_code).phrase.lower().replace(" ", "_")
+        except ValueError:
+            code = "http_error"
+        message = detail if isinstance(detail, str) else "request failed"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_envelope(jsonable_encoder(detail), code, message),
+        headers=headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Same 422 body FastAPI emits by default, plus the "error" object."""
+    return JSONResponse(
+        status_code=422,
+        content=_error_envelope(
+            jsonable_encoder(exc.errors()), "validation_error", "request validation failed"
+        ),
+    )
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
