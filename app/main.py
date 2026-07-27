@@ -40,7 +40,9 @@ class JsonLogFormatter(logging.Formatter):
     parseable line for Render's log viewer; timestamps are UTC.
     """
 
-    converter = time.gmtime
+    @staticmethod
+    def converter(secs: float | None) -> time.struct_time:
+        return time.gmtime(secs)
 
     def format(self, record: logging.LogRecord) -> str:
         msg = record.getMessage()
