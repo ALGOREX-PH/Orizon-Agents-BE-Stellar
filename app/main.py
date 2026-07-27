@@ -23,6 +23,7 @@ from .config import settings
 from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
 from .security import (
+    BodyLimitMiddleware,
     RateLimitMiddleware,
     RequestContextMiddleware,
     RequestIdLogFilter,
@@ -141,7 +142,12 @@ app = FastAPI(
     ],
 )
 
-# Added first → runs innermost: hardening headers land on every app response.
+# Added first → runs innermost: oversized bodies are rejected before the
+# router, while the 413 still passes through the header/CORS/request-id
+# layers wrapping it.
+app.add_middleware(BodyLimitMiddleware)
+
+# Hardening headers land on every response leaving the layers below.
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Registered before CORS so CORS wraps it and 429 responses still carry
