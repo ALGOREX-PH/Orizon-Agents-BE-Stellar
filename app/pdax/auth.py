@@ -5,7 +5,9 @@ Logs in with the configured account, answers a SOFTWARE_TOKEN_MFA challenge
 automatically when `PDAX_OTP_SECRET` is set, and caches the access/id tokens
 (10-minute life). When they expire it refreshes via the 30-day refresh token,
 falling back to a fresh login if the refresh fails. An asyncio lock keeps
-concurrent callers from stampeding the auth endpoints.
+concurrent callers from stampeding the auth endpoints, and a login circuit
+breaker fails fast after repeated failures so the real account is never
+hammered into an AccountLocked state.
 """
 from __future__ import annotations
 
@@ -28,12 +30,22 @@ _REFRESH = "pdax-institution/v1/refresh-token"
 # Refresh this many seconds before the 10-minute access token actually expires.
 _EXPIRY_SKEW = 30
 
+# Login circuit breaker: after this many consecutive login failures, fail fast
+# with the cached error until the cooldown elapses. This runs against a REAL
+# institutional account — hammering a failing login (e.g. from repeated
+# probes) risks a PDAX AccountLocked, so back off instead of retrying.
+_LOGIN_FAILURE_THRESHOLD = 3
+_LOGIN_COOLDOWN_SECONDS = 60.0
+
 
 class PdaxAuth:
     def __init__(self) -> None:
         self._tokens: TokenSet | None = None
         self._access_expiry: float = 0.0
         self._lock = asyncio.Lock()
+        self._login_failures = 0
+        self._last_login_error: PdaxError | None = None
+        self._breaker_open_until: float = 0.0
 
     async def access_headers(self, http: httpx.AsyncClient) -> dict[str, str]:
         """Return valid {access_token, id_token} headers, (re)authenticating
@@ -47,7 +59,31 @@ class PdaxAuth:
                     return self._headers()
                 except PdaxError:
                     self._tokens = None  # fall through to a clean login
-            await self._login(http)
+            if (
+                self._login_failures >= _LOGIN_FAILURE_THRESHOLD
+                and time.time() < self._breaker_open_until
+                and self._last_login_error is not None
+            ):
+                # Breaker open — replay the cached failure without dialing
+                # PDAX (a fresh copy, so tracebacks don't accumulate).
+                e = self._last_login_error
+                raise PdaxError(
+                    e.message,
+                    code=e.code,
+                    name=e.name,
+                    http_status=e.http_status,
+                    request_id=e.request_id,
+                    raw=e.raw,
+                )
+            try:
+                await self._login(http)
+            except PdaxError as e:
+                self._login_failures += 1
+                self._last_login_error = e
+                self._breaker_open_until = time.time() + _LOGIN_COOLDOWN_SECONDS
+                raise
+            self._login_failures = 0
+            self._last_login_error = None
             return self._headers()
 
     def _headers(self) -> dict[str, str]:
