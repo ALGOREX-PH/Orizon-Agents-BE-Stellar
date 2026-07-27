@@ -329,6 +329,55 @@ def test_retried_webhook_recovers_offramp_and_keeps_payout(monkeypatch):
     asyncio.run(run())
 
 
+def test_malformed_quote_envelope_fails_ramp_cleanly():
+    """A PDAX body missing the data envelope must land the ramp in "failed"
+    via a PdaxError — never escape as a bare KeyError (a 500 and a ramp
+    frozen in "converting")."""
+    client = _onramp_client()
+    client.responses["v2/trade/quote"] = {"detail": "upstream maintenance"}
+
+    async def run():
+        record = await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+        assert record.status == "awaiting_payment"
+        event = FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        )
+        advanced = await ramp.handle_event(client, event)
+        assert advanced is not None
+        assert advanced.status == "failed"
+        assert "malformed PDAX response" in (advanced.error or "")
+
+    asyncio.run(run())
+
+
+def test_malformed_quote_fields_fail_ramp_cleanly():
+    """Enveloped but field-mangled quote payloads (ValidationError) fold into
+    the same failed-ramp path instead of a 500."""
+    client = _onramp_client()
+    client.responses["v2/trade/quote"] = {"data": {"quote_id": "q1"}}
+
+    async def run():
+        record = await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+        event = FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        )
+        advanced = await ramp.handle_event(client, event)
+        assert advanced is not None
+        assert advanced.status == "failed"
+        assert record.status == "failed"
+        assert "malformed PDAX response" in (advanced.error or "")
+
+    asyncio.run(run())
+
+
 def test_unmatched_event_is_ignored():
     client = _onramp_client()
 
