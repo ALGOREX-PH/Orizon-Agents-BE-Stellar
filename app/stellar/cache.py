@@ -17,6 +17,11 @@ from typing import Any, Awaitable, Callable
 
 _store: dict[str, tuple[float, Any]] = {}
 
+# Sweep threshold: entries are only overwritten, never evicted, so a stream of
+# unique keys would grow the dict forever. Past this size, misses sweep expired
+# entries out.
+_MAX_ENTRIES = 512
+
 
 async def get_or_set(
     key: str,
@@ -32,6 +37,9 @@ async def get_or_set(
     hit = _store.get(key)
     if hit is not None and hit[0] > now:
         return hit[1]
+    if len(_store) > _MAX_ENTRIES:
+        for k in [k for k, (exp, _) in _store.items() if exp <= now]:
+            del _store[k]
     value = await producer()
     _store[key] = (time.monotonic() + ttl_seconds, value)
     return value
