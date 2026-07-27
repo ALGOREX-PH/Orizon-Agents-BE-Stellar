@@ -34,6 +34,7 @@ from stellar_sdk import (
 from stellar_sdk.client.requests_client import RequestsClient
 from stellar_sdk.exceptions import PrepareTransactionException
 from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
+from stellar_sdk.xdr import SCVal
 
 from ..config import settings
 
@@ -506,32 +507,32 @@ def _extract_return_value(result_meta_xdr: str | None) -> Any:
 
 
 # ── helpers for arg encoding ────────────────────────────────────────────
-def sym(s: str):
+def sym(s: str) -> SCVal:
     return scval.to_symbol(s)
 
 
-def addr(a: str):
+def addr(a: str) -> SCVal:
     return scval.to_address(Address(a))
 
 
-def i128(v: int):
+def i128(v: int) -> SCVal:
     return scval.to_int128(v)
 
 
-def u64(v: int):
+def u64(v: int) -> SCVal:
     return scval.to_uint64(v)
 
 
-def u32(v: int):
+def u32(v: int) -> SCVal:
     return scval.to_uint32(v)
 
 
-def bytes16(b: bytes):
+def bytes16(b: bytes) -> SCVal:
     assert len(b) == 16
     return scval.to_bytes(b)
 
 
-def bytes32(b: bytes):
+def bytes32(b: bytes) -> SCVal:
     assert len(b) == 32
     return scval.to_bytes(b)
 
