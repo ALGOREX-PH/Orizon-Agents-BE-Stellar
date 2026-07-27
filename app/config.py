@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     task_auth_required: bool = False
     # Per-client-IP sliding-window request budget (in-process, per worker).
     rate_limit_per_minute: int = 120
+    # Ceiling on concurrently running workflows (each fans out LLM calls).
+    # execute returns 503 "capacity_exhausted" once this many are in flight.
+    orchestrator_max_concurrent: int = 8
     # Ceiling for a single PaymentEscrow.charge, in USDC.
     max_charge_usdc: float = 100.0
 
