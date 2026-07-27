@@ -144,7 +144,7 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
             )
 
         result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
-        return {"agent": result}
+        return AgentRead(agent=result)
     except Exception as e:
         # Routine outcome for unknown ids (the simulate errors) — not a stack
         # trace event. Genuinely unexpected failures still surface via the 404
