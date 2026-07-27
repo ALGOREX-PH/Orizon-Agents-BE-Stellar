@@ -71,7 +71,7 @@ async def execute_plan(
     on-chain `charge` + `seal` at the end of the run and stores the tx
     hashes on the Task.
     """
-    task_id = f"tsk_{secrets.token_hex(3)}"
+    task_id = f"tsk_{secrets.token_hex(8)}"
     task = Task(
         id=task_id,
         intent=plan.intent,
