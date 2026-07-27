@@ -20,7 +20,7 @@ import secrets
 import time
 import uuid
 from collections import deque
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import Header, HTTPException
 

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 import secrets
-from typing import Any, Optional
+from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
 from ..demo_kits import DemoKit, detect_kit

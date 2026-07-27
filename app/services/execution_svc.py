@@ -5,7 +5,7 @@ import hashlib
 import logging
 import secrets
 import time
-from typing import Any, Optional
+from typing import Any
 
 from ..agents.registry import get_worker
 from ..config import settings

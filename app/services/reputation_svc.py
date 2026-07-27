@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
