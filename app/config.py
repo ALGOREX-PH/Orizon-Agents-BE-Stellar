@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # ── HTTP / CORS ───────────────────────────────────────────
     cors_origins: str = "http://localhost:3000"
     port: int = 8000
+    # Serve the interactive API docs (/docs, /redoc, /openapi.json). ON by
+    # default — the public demo advertises them; flip off to run dark.
+    docs_enabled: bool = True
 
     # ── Hardening ─────────────────────────────────────────────
     # Optional shared secret for the backend-signing routes. Empty (the
