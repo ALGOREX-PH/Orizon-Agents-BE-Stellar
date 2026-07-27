@@ -4,10 +4,10 @@ import logging
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 logger = logging.getLogger(__name__)
@@ -192,10 +192,7 @@ class CodeGen(Worker):
         # runs as a separate top-level `code.critic` step in the pipeline.
         self._agent = Agent(
             name="code.gen",
-            model=OpenAIChat(
-                id=settings.worker_model,
-                api_key=settings.openai_api_key,
-            ),
+            model=build_openai_chat(settings.worker_model),
             instructions=INSTRUCTIONS,
             output_schema=CodeArtifact,
         )
