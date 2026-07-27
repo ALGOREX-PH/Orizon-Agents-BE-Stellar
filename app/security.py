@@ -69,9 +69,12 @@ class RateLimitMiddleware:
         headers = dict(scope.get("headers") or [])
         fwd = headers.get(b"x-forwarded-for")
         if fwd:
-            first = fwd.decode("latin-1").split(",")[0].strip()
-            if first:
-                return first
+            # Key on the LAST hop: proxies append, so the leftmost entries
+            # are client-controlled — trusting them would let a caller rotate
+            # fake IPs to bypass the limiter and bloat the bucket table.
+            last = fwd.decode("latin-1").split(",")[-1].strip()
+            if last:
+                return last
         client = scope.get("client")
         return client[0] if client else "unknown"
 
