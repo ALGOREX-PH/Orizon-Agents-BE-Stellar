@@ -221,7 +221,7 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
         result = await rcache.get_or_set(
             f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch
         )
-        return {"attestation": result}
+        return AttestationRead(attestation=result)
     except Exception as e:
         logger.exception("attestation read failed for %s", job_id_hex)
         raise HTTPException(400, "attestation_read_failed") from e
