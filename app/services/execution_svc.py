@@ -173,6 +173,9 @@ async def _run(
             # Surface critic notes / violations if the worker reports them.
             if isinstance(output, dict):
                 violations = output.get("critic_violations") or []
+                if violations:
+                    joined = " · ".join(violations)[:180]
+                    await _emit(task_id, start, "exec", f"{worker.name}: violations → {joined}")
                 notes = output.get("critic_notes") or []
                 if notes:
                     joined = " · ".join(notes)[:180]
