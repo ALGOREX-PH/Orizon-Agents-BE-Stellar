@@ -23,11 +23,12 @@ from .models.webhooks import (
     WebhookRegisterRequest,
     WebhookRegistration,
 )
+from .trade import _unwrap
 
 
 async def register_webhook(client: PdaxClient, req: WebhookRegisterRequest) -> WebhookRegistration:
     data = await client.request("POST", "pdax-institution/v1/config/webhook", json=req.model_dump())
-    return WebhookRegistration(**data["data"])
+    return _unwrap(data, WebhookRegistration)
 
 
 def verify_signature(raw_body: bytes, signature: str | None) -> bool:
