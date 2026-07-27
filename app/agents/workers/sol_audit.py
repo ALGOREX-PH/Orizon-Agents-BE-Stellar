@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from ...config import settings
 from .base import Worker
 
-
 Severity = Literal["info", "low", "medium", "high", "critical"]
 
 

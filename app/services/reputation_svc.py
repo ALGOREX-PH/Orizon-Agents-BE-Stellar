@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -94,7 +94,7 @@ def lower_bound_bps(mean_bps: int, weight: int) -> int:
     return max(0, min(10_000, round(lb * 10_000)))
 
 
-def passes_floor(info: Optional[RepInfo]) -> bool:
+def passes_floor(info: RepInfo | None) -> bool:
     """Routing-floor check on the conservative lower bound."""
     if info is None:
         return True
@@ -108,7 +108,7 @@ def rating_weight_stroops(step_price_usdc: float) -> int:
 
 
 def synthetic_rating(
-    step_output: Optional[dict[str, Any]],
+    step_output: dict[str, Any] | None,
     step_price_usdc: float,
 ) -> tuple[int, int]:
     """Derive the settler's synthetic rating for one settled step.
@@ -219,6 +219,6 @@ async def fetch_reps(
             timeout=timeout_seconds,
         )
         return {info.agent_id: info for info in infos}
-    except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
+    except Exception as e:  # TimeoutError included: it subclasses Exception on 3.11+
         logger.debug("reputation batch read degraded to prior: %s", e)
         return {a: _prior_info(a) for a in agent_ids}

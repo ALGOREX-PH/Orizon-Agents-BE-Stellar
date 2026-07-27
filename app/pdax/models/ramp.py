@@ -97,8 +97,8 @@ class OnRampRequest(BaseModel):
     sender_last_name: str = Field(..., max_length=200)
     sender_country_origin: str = "Philippines"
     source_of_funds: str = "Compensation"
-    beneficiary_first_name: str
-    beneficiary_last_name: str
+    beneficiary_first_name: str = Field(..., max_length=200)
+    beneficiary_last_name: str = Field(..., max_length=200)
     purpose: str = "Purchase of Goods"
     relationship_of_sender_to_beneficiary: str = "Myself"
 
@@ -114,17 +114,17 @@ class OffRampRequest(BaseModel):
     @classmethod
     def _check_usdc_amount(cls, v: str) -> str:
         return _positive_decimal_str(v, "100000")
-    beneficiary_bank_code: str
-    beneficiary_account_name: str
-    beneficiary_account_number: str
+    beneficiary_bank_code: str = Field(..., max_length=200)
+    beneficiary_account_name: str = Field(..., max_length=200)
+    beneficiary_account_number: str = Field(..., max_length=200)
     fee_type: str = "Sender"
     method: str = "PAY-TO-ACCOUNT-NON-REAL-TIME"
     sender_first_name: str
     sender_last_name: str
     sender_country_origin: str = "Philippines"
     source_of_funds: str = "Business Income"
-    beneficiary_first_name: str
-    beneficiary_last_name: str
+    beneficiary_first_name: str = Field(..., max_length=200)
+    beneficiary_last_name: str = Field(..., max_length=200)
     purpose: str = "Business Transaction"
     relationship_of_sender_to_beneficiary: str = "Myself"
 

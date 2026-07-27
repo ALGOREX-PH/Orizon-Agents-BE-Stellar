@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 import secrets
-from typing import Any, Optional
+from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
 from ..demo_kits import DemoKit, detect_kit
@@ -40,7 +40,7 @@ _KIT_ETAS: dict[str, float] = {
 }
 
 
-def _rep_fields(info: Optional[reputation_svc.RepInfo]) -> dict[str, Any]:
+def _rep_fields(info: reputation_svc.RepInfo | None) -> dict[str, Any]:
     """PlanStep reputation stamp — empty when the agent has no rep entry."""
     if info is None:
         return {}
@@ -121,7 +121,7 @@ async def _build_kit_plan(
         total_usdc=total_price,
         total_eta=total_eta,
     )
-    state.plans[plan_id] = stored
+    state.add_plan(stored)
 
     return DecomposeResponse(
         plan_id=plan_id,
@@ -198,7 +198,7 @@ Return the Plan."""
         total_usdc=total_price,
         total_eta=total_eta,
     )
-    state.plans[plan_id] = stored
+    state.add_plan(stored)
 
     return DecomposeResponse(
         plan_id=plan_id,

@@ -8,7 +8,7 @@ services:
     rootDir: .
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
-    healthCheckPath: /
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
       # ── Secrets — set these in the Render dashboard, never in git ──────

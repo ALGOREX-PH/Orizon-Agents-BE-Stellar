@@ -14,8 +14,8 @@ import hmac
 from collections import OrderedDict
 
 from ..config import settings
-from .config import allow_unsigned_webhooks
 from .client import PdaxClient
+from .config import allow_unsigned_webhooks
 from .models.webhooks import (
     CryptoEvent,
     FiatEvent,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse

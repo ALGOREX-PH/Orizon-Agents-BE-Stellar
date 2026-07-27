@@ -12,10 +12,22 @@ after the await, back on the loop). Failures are never cached.
 """
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 _store: dict[str, tuple[float, Any]] = {}
+
+# Single-flight: concurrent misses on one key serialize on a per-key lock so
+# only the first caller runs the producer; the rest are served the cached
+# result on re-check. Locks live on the loop thread only.
+_locks: dict[str, asyncio.Lock] = {}
+
+# Sweep threshold: entries are only overwritten, never evicted, so a stream of
+# unique keys would grow the dict forever. Past this size, misses sweep expired
+# entries out.
+_MAX_ENTRIES = 512
 
 
 async def get_or_set(
@@ -28,15 +40,28 @@ async def get_or_set(
     Only successful results are cached; if `producer` raises, the exception
     propagates and nothing is stored.
     """
-    now = time.monotonic()
     hit = _store.get(key)
-    if hit is not None and hit[0] > now:
+    if hit is not None and hit[0] > time.monotonic():
         return hit[1]
-    value = await producer()
-    _store[key] = (time.monotonic() + ttl_seconds, value)
-    return value
+    lock = _locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        # Re-check: while we waited for the lock, the first flight may have
+        # produced and cached the value.
+        now = time.monotonic()
+        hit = _store.get(key)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        if len(_store) > _MAX_ENTRIES:
+            for k in [k for k, (exp, _) in _store.items() if exp <= now]:
+                del _store[k]
+            for k in [k for k, lk in _locks.items() if k != key and not lk.locked()]:
+                del _locks[k]
+        value = await producer()
+        _store[key] = (time.monotonic() + ttl_seconds, value)
+        return value
 
 
 def clear() -> None:
     """Drop all cached entries (used by tests)."""
     _store.clear()
+    _locks.clear()

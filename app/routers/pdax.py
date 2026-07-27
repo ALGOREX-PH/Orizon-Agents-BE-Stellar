@@ -10,19 +10,34 @@ upstream status + message.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..config import settings
 from ..pdax import (
     balances as pb,
+)
+from ..pdax import base_url, get_pdax_client
+from ..pdax import constants as pc
+from ..pdax import (
     funding as pf,
+)
+from ..pdax import (
     ramp as pr,
+)
+from ..pdax import (
     trade as pt,
+)
+from ..pdax import (
     transactions as ptx,
+)
+from ..pdax import (
     webhooks as pw,
+)
+from ..pdax import (
     withdrawals as pwd,
 )
-from ..pdax import base_url, constants as pc, get_pdax_client
 from ..pdax.errors import PdaxError
 from ..pdax.models.common import Side
 from ..pdax.models.funding import FiatDepositRequest
@@ -36,8 +51,15 @@ from ..pdax.models.trade import (
 )
 from ..pdax.models.webhooks import WebhookRegisterRequest
 from ..pdax.models.withdrawals import CryptoOutRequest, FiatWithdrawRequest
+from ..security import require_api_key
 
 router = APIRouter(prefix="/pdax", tags=["pdax"])
+
+# Money-moving + account-revealing routes require the backend API key
+# (a no-op only when API_KEY is unset — the public demo default). The
+# genuinely public routes (health, environment, reference tables, and the
+# HMAC-authenticated webhook receiver) stay on `router`.
+secured = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 def _fail(e: PdaxError) -> HTTPException:
@@ -74,7 +96,7 @@ async def health() -> dict:
 
 
 # ── trade ───────────────────────────────────────────────────────
-@router.get("/trade/price")
+@secured.get("/trade/price")
 async def trade_price(
     quote_currency: str,
     side: Side,
@@ -95,7 +117,7 @@ async def trade_price(
         raise _fail(e) from e
 
 
-@router.get("/trade/price/v2")
+@secured.get("/trade/price/v2")
 async def trade_price_v2(
     quote_currency: str,
     side: Side,
@@ -118,7 +140,7 @@ async def trade_price_v2(
         raise _fail(e) from e
 
 
-@router.post("/trade/quote")
+@secured.post("/trade/quote")
 async def trade_quote(req: FirmQuoteRequest) -> dict:
     """Firm quote (expires in ~15s) acceptable via /trade/order."""
     try:
@@ -128,7 +150,7 @@ async def trade_quote(req: FirmQuoteRequest) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/trade/quote/v2")
+@secured.post("/trade/quote/v2")
 async def trade_quote_v2(req: FirmQuoteV2Request) -> dict:
     """Firm quote (v2)."""
     try:
@@ -138,7 +160,7 @@ async def trade_quote_v2(req: FirmQuoteV2Request) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/trade/order")
+@secured.post("/trade/order")
 async def trade_order(req: OrderRequest) -> dict:
     """Accept a firm quote and execute the trade."""
     try:
@@ -148,7 +170,7 @@ async def trade_order(req: OrderRequest) -> dict:
         raise _fail(e) from e
 
 
-@router.get("/trade/orders/{order_id}")
+@secured.get("/trade/orders/{order_id}")
 async def trade_order_details(order_id: int) -> dict:
     try:
         order = await pt.get_order(get_pdax_client(), order_id)
@@ -157,7 +179,7 @@ async def trade_order_details(order_id: int) -> dict:
         raise _fail(e) from e
 
 
-@router.get("/trade/orders")
+@secured.get("/trade/orders")
 async def trade_orders(
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
@@ -178,7 +200,7 @@ async def trade_orders(
 
 
 # ── funding (deposits) ──────────────────────────────────────────
-@router.get("/crypto/deposit")
+@secured.get("/crypto/deposit")
 async def crypto_deposit(currency: str) -> dict:
     """Wallet address to deposit a crypto token, e.g. currency=USDCXLM."""
     try:
@@ -188,7 +210,7 @@ async def crypto_deposit(currency: str) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/fiat/deposit")
+@secured.post("/fiat/deposit")
 async def fiat_deposit(req: FiatDepositRequest) -> dict:
     """Initiate a PHP cash-in; returns a payment_checkout_url."""
     try:
@@ -199,7 +221,7 @@ async def fiat_deposit(req: FiatDepositRequest) -> dict:
 
 
 # ── withdrawals ─────────────────────────────────────────────────
-@router.post("/fiat/withdraw")
+@secured.post("/fiat/withdraw")
 async def fiat_withdraw(req: FiatWithdrawRequest) -> dict:
     """Withdraw PHP to a bank / e-wallet beneficiary."""
     try:
@@ -209,7 +231,7 @@ async def fiat_withdraw(req: FiatWithdrawRequest) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/fiat/user-info-upload")
+@secured.post("/fiat/user-info-upload")
 async def fiat_user_info_upload(req: FiatWithdrawRequest) -> dict:
     """Upload sender/beneficiary travel-rule data for a fiat withdrawal."""
     try:
@@ -219,7 +241,7 @@ async def fiat_user_info_upload(req: FiatWithdrawRequest) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/crypto/withdraw")
+@secured.post("/crypto/withdraw")
 async def crypto_withdraw(req: CryptoOutRequest) -> dict:
     """Send a crypto token to an external address (e.g. USDCXLM)."""
     try:
@@ -230,7 +252,7 @@ async def crypto_withdraw(req: CryptoOutRequest) -> dict:
 
 
 # ── transaction history ─────────────────────────────────────────
-@router.get("/fiat/transactions")
+@secured.get("/fiat/transactions")
 async def fiat_transactions(
     mode: str | None = None,
     identifier: str | None = None,
@@ -251,7 +273,7 @@ async def fiat_transactions(
         raise _fail(e) from e
 
 
-@router.get("/crypto/transactions")
+@secured.get("/crypto/transactions")
 async def crypto_transactions(
     identifier: str | None = None,
     txn_hash: str | None = None,
@@ -275,7 +297,7 @@ async def crypto_transactions(
 
 
 # ── balances ────────────────────────────────────────────────────
-@router.get("/balances")
+@secured.get("/balances")
 async def balances(currency: str | None = None) -> dict:
     """View balances for all assets (or a single currency)."""
     try:
@@ -286,7 +308,7 @@ async def balances(currency: str | None = None) -> dict:
 
 
 # ── webhooks ────────────────────────────────────────────────────
-@router.post("/webhooks/register")
+@secured.post("/webhooks/register")
 async def webhook_register(req: WebhookRegisterRequest) -> dict:
     """Register this backend's URL to receive crypto or fiat events."""
     try:
@@ -314,7 +336,10 @@ async def webhook_receive(request: Request) -> dict:
     event = pw.parse_event(payload)
     # Drive any waiting ramp forward (fiat deposit → buy → withdraw, or
     # crypto deposit → sell → fiat withdraw).
-    advanced = await pr.handle_event(get_pdax_client(), event)
+    try:
+        advanced = await pr.handle_event(get_pdax_client(), event)
+    except PdaxError as e:
+        raise _fail(e) from e
     return {
         "received": True,
         "event": event.model_dump(),
@@ -369,24 +394,26 @@ async def reference_countries() -> dict:
 
 
 # ── ramp (PHP <-> USDCXLM orchestration) ────────────────────────
-@router.post("/ramp/estimate")
-async def ramp_estimate(direction: str, amount: str, currency: str | None = None) -> dict:
+@secured.post("/ramp/estimate")
+async def ramp_estimate(
+    direction: Literal["onramp", "offramp"],
+    amount: str,
+    currency: str | None = None,
+) -> dict:
     """Indicative conversion preview. `currency` denominates `amount`; pass
     currency=USDC on an on-ramp to price a target USDC amount (workflow cost)."""
-    if direction not in {"onramp", "offramp"}:
-        raise HTTPException(400, detail="direction must be onramp or offramp")
     try:
         _positive_decimal_str(amount, "10000000")
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        est = await pr.estimate(get_pdax_client(), direction, amount, currency)  # type: ignore[arg-type]
+        est = await pr.estimate(get_pdax_client(), direction, amount, currency)
         return est.model_dump()
     except PdaxError as e:
         raise _fail(e) from e
 
 
-@router.post("/ramp/funding-quote")
+@secured.post("/ramp/funding-quote")
 async def ramp_funding_quote(usdc: str) -> dict:
     """Pesos to pay to fund a workflow costing `usdc` USDC — buffered + rounded
     up so the amount always covers it."""
@@ -401,29 +428,35 @@ async def ramp_funding_quote(usdc: str) -> dict:
         raise _fail(e) from e
 
 
-@router.post("/ramp/onramp")
+@secured.post("/ramp/onramp")
 async def ramp_onramp(req: OnRampRequest) -> dict:
     """Start a PHP → USDCXLM ramp. Returns a checkout URL for the buyer to pay;
     settlement is completed by the fiat-deposit webhook."""
-    record = await pr.start_onramp(get_pdax_client(), req)
+    try:
+        record = await pr.start_onramp(get_pdax_client(), req)
+    except PdaxError as e:
+        raise _fail(e) from e
     return record.model_dump()
 
 
-@router.post("/ramp/offramp")
+@secured.post("/ramp/offramp")
 async def ramp_offramp(req: OffRampRequest) -> dict:
     """Start a USDCXLM → PHP ramp. Returns a deposit address for the agent to
     send USDC to; settlement is completed by the crypto-deposit webhook."""
-    record = await pr.start_offramp(get_pdax_client(), req)
+    try:
+        record = await pr.start_offramp(get_pdax_client(), req)
+    except PdaxError as e:
+        raise _fail(e) from e
     return record.model_dump()
 
 
-@router.get("/ramp")
+@secured.get("/ramp")
 async def ramp_list() -> dict:
     """All ramps tracked this process lifetime."""
     return {"ramps": [r.model_dump() for r in pr.ramp_store.list_all()]}
 
 
-@router.get("/ramp/{ramp_id}")
+@secured.get("/ramp/{ramp_id}")
 async def ramp_status(ramp_id: str) -> dict:
     """Current state + stage history of a single ramp."""
     record = pr.ramp_store.get(ramp_id)
@@ -432,7 +465,7 @@ async def ramp_status(ramp_id: str) -> dict:
     return record.model_dump()
 
 
-@router.post("/ramp/{ramp_id}/reconcile")
+@secured.post("/ramp/{ramp_id}/reconcile")
 async def ramp_reconcile(ramp_id: str) -> dict:
     """Check PDAX for settlement and advance the ramp — used by the UI to track
     progress without relying on PDAX's redirect page."""
@@ -443,3 +476,6 @@ async def ramp_reconcile(ramp_id: str) -> dict:
     if record is None:
         raise HTTPException(404, detail="ramp not found")
     return record.model_dump()
+
+
+router.include_router(secured)

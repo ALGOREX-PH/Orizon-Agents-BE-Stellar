@@ -1,4 +1,7 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015"
 
 
 class Settings(BaseSettings):
@@ -82,6 +85,27 @@ class Settings(BaseSettings):
     # stays as USDC). Reference PHP is what we price off, to clear trade minimums.
     pdax_ramp_min_php: float = 200
     pdax_ramp_quote_reference_php: str = "1000"
+
+    @model_validator(mode="after")
+    def _mainnet_requires_mainnet_passphrase(self) -> "Settings":
+        """Fail fast on a half-flipped mainnet config.
+
+        stellar_network and stellar_network_passphrase default independently
+        (testnet), so STELLAR_NETWORK=mainnet with a forgotten passphrase
+        would silently sign transactions for the WRONG network. Signing key
+        is deliberately not required — read-only deployments are legitimate.
+        """
+        if (
+            self.stellar_network.lower() in {"mainnet", "public"}
+            and self.stellar_network_passphrase != MAINNET_PASSPHRASE
+        ):
+            raise ValueError(
+                "STELLAR_NETWORK is set to mainnet/public but "
+                "STELLAR_NETWORK_PASSPHRASE is not the mainnet passphrase "
+                f"({MAINNET_PASSPHRASE!r}). Set STELLAR_NETWORK_PASSPHRASE "
+                "to match, or switch STELLAR_NETWORK back to testnet."
+            )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

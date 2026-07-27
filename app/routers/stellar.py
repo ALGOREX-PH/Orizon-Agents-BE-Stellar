@@ -9,12 +9,12 @@ Write routes have two shapes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import time
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Any, Literal
-
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 
 from ..config import settings
@@ -23,8 +23,6 @@ from ..services import reputation_svc
 from ..state import state
 from ..stellar import cache as rcache
 from ..stellar import client as sc
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +125,14 @@ async def network() -> NetworkInfo:
     }
 
 
+# Agent ids are contract Symbols: short alphanumeric/underscore tokens. Reject
+# garbage at the router edge instead of paying an RPC round-trip to find out.
+AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
+
+
 # ── reads ───────────────────────────────────────────────────────
 @router.get("/agent/{agent_id}", response_model=AgentRead)
-async def read_agent(agent_id: str) -> AgentRead:
+async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> AgentRead:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
         async def _fetch():
@@ -143,7 +146,10 @@ async def read_agent(agent_id: str) -> AgentRead:
         result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
         return {"agent": result}
     except Exception as e:
-        logger.exception("agent read failed for %s", agent_id)
+        # Routine outcome for unknown ids (the simulate errors) — not a stack
+        # trace event. Genuinely unexpected failures still surface via the 404
+        # cause chain and RPC-layer logging.
+        logger.warning("agent read failed for %s: %s", agent_id, e)
         raise HTTPException(404, "agent_read_failed") from e
 
 
@@ -184,7 +190,9 @@ async def reputation_params() -> ReputationParams:
 
 
 @router.get("/reputation/{agent_id}", response_model=ReputationInfo)
-async def read_reputation(agent_id: str) -> ReputationInfo:
+async def read_reputation(
+    agent_id: str = Path(..., pattern=AGENT_ID_PATTERN),
+) -> ReputationInfo:
     """Smoothed reputation for one agent — cached ReputationLedger.rep_state
     read with Bayesian prior smoothing; prior fallback on any failure.
     """
@@ -224,7 +232,9 @@ class RegisterAgentReq(BaseModel):
     )
     agent_id: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[str] = Field(default_factory=list, max_length=16)
+    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=16
+    )
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
@@ -285,7 +295,9 @@ async def build_authorize(req: AuthorizeReq) -> AuthorizeXdrResponse:
 
 
 class SubmitReq(BaseModel):
-    signed_xdr: str
+    # A prepared invoke tx is a few KB of base64; 32 KiB is generous headroom
+    # while keeping the endpoint from swallowing arbitrary payloads.
+    signed_xdr: str = Field(..., min_length=1, max_length=32_768)
 
 
 @router.post("/submit")
@@ -345,8 +357,12 @@ class SealReq(BaseModel):
         ..., pattern=r"^G[A-Z2-7]{55}$"
     )  # G-address of the workflow owner
     intent_hash_hex: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
-    agents: list[str] = Field(..., max_length=32)
-    receipts_hex: list[str] = Field(..., max_length=32)  # each 32 hex chars
+    agents: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        ..., max_length=32
+    )
+    receipts_hex: list[Annotated[str, Field(pattern=r"^[0-9a-fA-F]{32}$")]] = Field(
+        ..., max_length=32
+    )
     total_spent_usdc: float = Field(..., ge=0, le=100_000, allow_inf_nan=False)
 
 

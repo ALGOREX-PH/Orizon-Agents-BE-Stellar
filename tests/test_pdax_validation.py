@@ -34,8 +34,11 @@ def test_ramp_estimate_rejects_negative_amount(client):
 
 
 def test_ramp_estimate_rejects_bad_direction(client):
+    # `direction` is a Literal — FastAPI rejects bad values with its own
+    # 422 validation envelope before the handler runs.
     r = client.post("/api/pdax/ramp/estimate?direction=sideways&amount=100")
-    assert r.status_code == 400
+    assert r.status_code == 422
+    assert any(e["loc"][-1] == "direction" for e in r.json()["detail"])
 
 
 def test_onramp_rejects_bad_stellar_address(client):

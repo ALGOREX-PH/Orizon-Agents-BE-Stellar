@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Header, Response
 
 from ..schemas import X402Request, X402Response
 

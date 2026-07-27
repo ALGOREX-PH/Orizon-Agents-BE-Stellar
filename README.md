@@ -91,13 +91,13 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-46 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
+71 tests, all hermetic — no OpenAI key, no network, no funded Stellar account needed.
 
 ## Environment variables
 
 | name | default | purpose |
 | --- | --- | --- |
-| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` require a matching `X-API-Key` header |
+| `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` and all non-public `/api/pdax/*` routes require a matching `X-API-Key` header |
 | `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
 | `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
 
@@ -154,6 +154,9 @@ The contracts are live on Stellar **mainnet** — `render.yaml` ships these as t
 
 ## Notes
 
+- Rate-limited (non-exempt) responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`; throttled requests get `429` + `Retry-After`.
+- Every response carries hardening headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
+- Every response echoes an `X-Request-ID` (yours, or a generated one) and is logged as one line: method, path, status, duration, request id.
 - Storage is in-memory. State resets on restart.
 - 4 real Agno workers (`copywrite.v3`, `seo.brief`, `research.pro`, `sol-audit`) + `code.gen`; the remaining workers are mocks.
 - Payments and ERC-8004 proofs are simulated unless `STELLAR_SIGNING_KEY` is set — then they become real testnet transactions.
