@@ -12,7 +12,7 @@ import asyncio
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -127,9 +127,14 @@ async def network() -> NetworkInfo:
     }
 
 
+# Agent ids are contract Symbols: short alphanumeric/underscore tokens. Reject
+# garbage at the router edge instead of paying an RPC round-trip to find out.
+AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
+
+
 # ── reads ───────────────────────────────────────────────────────
 @router.get("/agent/{agent_id}", response_model=AgentRead)
-async def read_agent(agent_id: str) -> AgentRead:
+async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> AgentRead:
     """Read an Agent from AgentRegistry.get(id)."""
     try:
         async def _fetch():
@@ -143,7 +148,10 @@ async def read_agent(agent_id: str) -> AgentRead:
         result = await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
         return {"agent": result}
     except Exception as e:
-        logger.exception("agent read failed for %s", agent_id)
+        # Routine outcome for unknown ids (the simulate errors) — not a stack
+        # trace event. Genuinely unexpected failures still surface via the 404
+        # cause chain and RPC-layer logging.
+        logger.warning("agent read failed for %s: %s", agent_id, e)
         raise HTTPException(404, "agent_read_failed") from e
 
 
@@ -184,7 +192,9 @@ async def reputation_params() -> ReputationParams:
 
 
 @router.get("/reputation/{agent_id}", response_model=ReputationInfo)
-async def read_reputation(agent_id: str) -> ReputationInfo:
+async def read_reputation(
+    agent_id: str = Path(..., pattern=AGENT_ID_PATTERN),
+) -> ReputationInfo:
     """Smoothed reputation for one agent — cached ReputationLedger.rep_state
     read with Bayesian prior smoothing; prior fallback on any failure.
     """
