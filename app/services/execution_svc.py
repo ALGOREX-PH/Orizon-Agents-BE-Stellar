@@ -72,6 +72,10 @@ async def execute_plan(
     hashes on the Task.
     """
     task_id = f"tsk_{secrets.token_hex(8)}"
+    # Capability token for reading this task (status/artifact/trace). Lives
+    # in state.task_tokens — never on the Task response model — and is only
+    # enforced when settings.task_auth_required is on.
+    read_token = secrets.token_urlsafe(24)
     task = Task(
         id=task_id,
         intent=plan.intent,
@@ -81,6 +85,7 @@ async def execute_plan(
         started="just now",
     )
     state.add_task(task)
+    state.task_tokens[task_id] = read_token
 
     _track_background_task(asyncio.create_task(_run(plan, task_id, auth_id_hex=auth_id_hex, payer=payer)))
     return task_id
