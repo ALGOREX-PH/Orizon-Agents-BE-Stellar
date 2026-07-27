@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -26,7 +28,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     seed_registry()
+    # Bound the default executor: asyncio.to_thread otherwise sizes it to
+    # min(32, cpu_count + 4) from the HOST's core count, while Render grants
+    # this container only a small CPU share — 8 threads comfortably cover the
+    # blocking Soroban SDK calls without oversubscribing the worker.
+    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="soroban")
+    asyncio.get_running_loop().set_default_executor(executor)
     yield
+    executor.shutdown(wait=False)
 
 
 class SecurityHeadersMiddleware:
