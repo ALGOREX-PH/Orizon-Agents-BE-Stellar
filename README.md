@@ -98,8 +98,11 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 | name | default | purpose |
 | --- | --- | --- |
 | `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` and all non-public `/api/pdax/*` routes require a matching `X-API-Key` header |
+| `TASK_AUTH_REQUIRED` | `false` | when true, task/trace/artifact reads require the per-task `read_token` returned by execute |
+| `ORCHESTRATOR_MAX_CONCURRENT` | `8` | in-flight workflow ceiling — excess execute calls get a 503 `capacity_exhausted` |
 | `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
 | `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
+| `DOCS_ENABLED` | `true` | serve `/docs`, `/redoc`, and `/openapi.json` |
 
 Everything else (model IDs, contract addresses, RPC, PDAX sandbox) is documented in `.env.example` — copy it to `.env` and fill in what you need.
 
