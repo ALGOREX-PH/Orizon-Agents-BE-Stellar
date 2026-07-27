@@ -39,6 +39,23 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+def client_key(scope: dict) -> str:
+    """Resolve the client key used for rate limiting and access logs.
+
+    Keys on the LAST X-Forwarded-For hop: proxies append, so the leftmost
+    entries are client-controlled — trusting them would let a caller rotate
+    fake IPs to bypass the limiter and bloat the bucket table.
+    """
+    headers = dict(scope.get("headers") or [])
+    fwd = headers.get(b"x-forwarded-for")
+    if fwd:
+        last = fwd.decode("latin-1").split(",")[-1].strip()
+        if last:
+            return last
+    client = scope.get("client")
+    return client[0] if client else "unknown"
+
+
 async def require_api_key(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> None:
@@ -101,12 +118,15 @@ class RequestContextMiddleware:
                 if path not in EXEMPT_PATHS:
                     duration_ms = (time.monotonic() - started) * 1000.0
                     logger.info(
-                        "%s %s -> %s in %.1fms [%s]",
+                        "%s %s -> %s in %.1fms [%s] client=%s",
                         method,
                         path,
                         message.get("status"),
                         duration_ms,
                         request_id,
+                        # Same key the rate limiter buckets on, so a 429 in
+                        # the log can be traced to the client that caused it.
+                        client_key(scope),
                     )
             await send(message)
 
@@ -136,19 +156,6 @@ class RateLimitMiddleware:
         self._hits: dict[str, deque[float]] = {}
         self._since_sweep = 0
 
-    def _client_key(self, scope: dict) -> str:
-        headers = dict(scope.get("headers") or [])
-        fwd = headers.get(b"x-forwarded-for")
-        if fwd:
-            # Key on the LAST hop: proxies append, so the leftmost entries
-            # are client-controlled — trusting them would let a caller rotate
-            # fake IPs to bypass the limiter and bloat the bucket table.
-            last = fwd.decode("latin-1").split(",")[-1].strip()
-            if last:
-                return last
-        client = scope.get("client")
-        return client[0] if client else "unknown"
-
     def _sweep(self, now: float) -> None:
         cutoff = now - self.window
         stale = [ip for ip, dq in self._hits.items() if not dq or dq[-1] < cutoff]
@@ -166,7 +173,7 @@ class RateLimitMiddleware:
             return
 
         now = time.monotonic()
-        key = self._client_key(scope)
+        key = client_key(scope)
         dq = self._hits.setdefault(key, deque())
         cutoff = now - self.window
         while dq and dq[0] <= cutoff:
