@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 from pydantic import BaseModel, Field
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .base import Worker
 
 
@@ -29,7 +29,7 @@ class Copywrite(Worker):
     def __init__(self) -> None:
         self._agent = Agent(
             name="copywrite.v3",
-            model=OpenAIChat(id=settings.worker_model, api_key=settings.openai_api_key),
+            model=build_openai_chat(settings.worker_model),
             instructions=(
                 "You are a senior marketing copywriter. Given an intent, draft a hero "
                 "headline (<=80 chars), a hero subtitle (<=160 chars), and 3–4 landing "
