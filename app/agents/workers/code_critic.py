@@ -13,9 +13,9 @@ from __future__ import annotations
 from typing import Any
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
 
 from ...config import settings
+from ..model_factory import build_openai_chat
 from .code_gen import CodeArtifact, coerce_artifact  # reuse schema + JSON-string coercion
 
 INSTRUCTIONS = """You are Orizon's senior code reviewer.
@@ -72,10 +72,7 @@ def _build_critic() -> Agent:
     # temperature on Chat Completions. Let the model default.
     return Agent(
         name="code.critic",
-        model=OpenAIChat(
-            id=settings.worker_model,
-            api_key=settings.openai_api_key,
-        ),
+        model=build_openai_chat(settings.worker_model),
         instructions=INSTRUCTIONS,
         output_schema=CodeArtifact,
     )
