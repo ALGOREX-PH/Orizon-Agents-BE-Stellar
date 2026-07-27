@@ -10,6 +10,8 @@ upstream status + message.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..config import settings
@@ -380,17 +382,19 @@ async def reference_countries() -> dict:
 
 # ── ramp (PHP <-> USDCXLM orchestration) ────────────────────────
 @secured.post("/ramp/estimate")
-async def ramp_estimate(direction: str, amount: str, currency: str | None = None) -> dict:
+async def ramp_estimate(
+    direction: Literal["onramp", "offramp"],
+    amount: str,
+    currency: str | None = None,
+) -> dict:
     """Indicative conversion preview. `currency` denominates `amount`; pass
     currency=USDC on an on-ramp to price a target USDC amount (workflow cost)."""
-    if direction not in {"onramp", "offramp"}:
-        raise HTTPException(400, detail="direction must be onramp or offramp")
     try:
         _positive_decimal_str(amount, "10000000")
     except ValueError as e:
         raise HTTPException(422, detail=str(e)) from e
     try:
-        est = await pr.estimate(get_pdax_client(), direction, amount, currency)  # type: ignore[arg-type]
+        est = await pr.estimate(get_pdax_client(), direction, amount, currency)
         return est.model_dump()
     except PdaxError as e:
         raise _fail(e) from e
