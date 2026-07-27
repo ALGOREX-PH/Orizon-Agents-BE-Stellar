@@ -160,11 +160,13 @@ async def read_reputations() -> ReputationBatch:
     the chain unreachable) come back as the prior, marked source="prior".
     """
     infos = await reputation_svc.fetch_reps([a.id for a in state.list_agents()])
-    return {
-        "reputations": {aid: info.model_dump() for aid, info in infos.items()},
-        "floor_bps": settings.reputation_floor_bps,
-        "prior_bps": settings.reputation_prior_bps,
-    }
+    return ReputationBatch(
+        reputations={
+            aid: ReputationInfo(**info.model_dump()) for aid, info in infos.items()
+        },
+        floor_bps=settings.reputation_floor_bps,
+        prior_bps=settings.reputation_prior_bps,
+    )
 
 
 # Declared BEFORE the dynamic /reputation/{agent_id} route — FastAPI matches
