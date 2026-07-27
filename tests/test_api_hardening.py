@@ -221,6 +221,13 @@ def test_cors_rejects_foreign_vercel_origins(client):
         assert "access-control-allow-origin" not in r.headers, origin
 
 
+def test_docs_exposed_by_default(client):
+    # docs_enabled defaults on (public demo); flipping it off is applied at
+    # app construction, so only the default is testable here.
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+
 def test_openapi_documents_error_envelope(client):
     spec = client.get("/openapi.json").json()
     assert spec["info"]["contact"]["name"] == "Orizon Agents"

@@ -125,9 +125,17 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+# DOCS_ENABLED=false hides /docs, /redoc, and the schema on locked-down
+# deployments. Read via getattr — config.py declares the field separately —
+# so the public-demo default (docs on) holds either way.
+_docs_enabled = bool(getattr(settings, "docs_enabled", True))
+
 app = FastAPI(
     title="Orizon Agents API",
     version="0.1.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
     description=(
         "The orchestration layer for autonomous digital labor: goal decomposition "
         "across a priced agent network, Soroban-settled payments and reputation on "
