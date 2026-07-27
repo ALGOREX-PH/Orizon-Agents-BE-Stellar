@@ -135,7 +135,9 @@ class ExecuteResponse(BaseModel):
 
 
 class X402Request(BaseModel):
-    agent_id: str = Field(..., max_length=64)
+    # agent_id is echoed into the X-Orizon-Payment-Required response header —
+    # restrict it to a safe token so header injection (CR/LF) is impossible.
+    agent_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9_.\-]{1,64}$")
     amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
