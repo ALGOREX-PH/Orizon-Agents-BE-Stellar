@@ -1,0 +1,7 @@
+# Lint configuration only — packaging stays requirements.txt-based and pytest
+# keeps its config in pytest.ini.
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
