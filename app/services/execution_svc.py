@@ -441,8 +441,9 @@ async def _submit_ratings(
         # Context keys are worker names (e.g. "code.gen"), same as agent_name.
         rating, weight = reputation_svc.synthetic_rating(context.get(step.agent_name or ""), step.est_price_usdc)
         try:
-            result = await asyncio.to_thread(
-                sc.submit_rating,
+            # Async path: the submit RPC runs in a worker thread but the ~30s
+            # status poll waits on the event loop — no executor thread pinned.
+            result = await sc.submit_rating_async(
                 step.agent_id,
                 job_id,
                 rating,

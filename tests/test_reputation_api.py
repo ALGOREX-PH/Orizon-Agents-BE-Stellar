@@ -144,13 +144,13 @@ def test_submit_ratings_is_best_effort(monkeypatch):
 
     calls: list[tuple] = []
 
-    def fake_submit(agent_id, job_id, rating, weight, payer, kind="auto"):
+    async def fake_submit(agent_id, job_id, rating, weight, payer, kind="auto"):
         calls.append((agent_id, job_id, rating, weight, payer, kind))
         if agent_id == "agt_bad":
             raise RuntimeError("sequence collision")
         return {"hash": "deadbeefcafe0123", "status": "SUCCESS"}
 
-    monkeypatch.setattr(sc, "submit_rating", fake_submit)
+    monkeypatch.setattr(sc, "submit_rating_async", fake_submit)
 
     steps = [
         PlanStep(
@@ -227,6 +227,7 @@ def test_submit_ratings_skips_when_not_configured(monkeypatch):
         raise AssertionError("submit_rating called despite missing key")
 
     monkeypatch.setattr(sc, "submit_rating", boom)
+    monkeypatch.setattr(sc, "submit_rating_async", boom)
 
     plan = StoredPlan(
         id="pln_skip",
