@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 _background_tasks: set[asyncio.Task] = set()
 
 
+class CapacityExhaustedError(RuntimeError):
+    """execute_plan refused to start: the concurrent-workflow ceiling
+    (settings.orchestrator_max_concurrent) is already in flight. The router
+    maps this to HTTP 503 "capacity_exhausted"."""
+
+
 def _track_background_task(task: asyncio.Task) -> None:
     _background_tasks.add(task)
     task.add_done_callback(_on_background_task_done)
@@ -70,7 +76,15 @@ async def execute_plan(
     If `auth_id_hex` + `payer` are provided, the backend performs a real
     on-chain `charge` + `seal` at the end of the run and stores the tx
     hashes on the Task.
+
+    Raises CapacityExhaustedError — before any task is minted — when
+    `settings.orchestrator_max_concurrent` workflows are already running,
+    so an unbounded burst of executes can't fan out unbounded LLM calls.
     """
+    active = sum(1 for t in _background_tasks if not t.done())
+    if active >= settings.orchestrator_max_concurrent:
+        raise CapacityExhaustedError(f"{active} workflows in flight (limit {settings.orchestrator_max_concurrent})")
+
     task_id = f"tsk_{secrets.token_hex(8)}"
     # Capability token for reading this task (status/artifact/trace). Lives
     # in state.task_tokens — never on the Task response model — and is only

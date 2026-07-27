@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from ..schemas import DecomposeRequest, DecomposeResponse, ExecuteRequest, ExecuteResponse
-from ..services.execution_svc import execute_plan
+from ..services.execution_svc import CapacityExhaustedError, execute_plan
 from ..services.orchestrator_svc import decompose
 from ..state import state
 
@@ -31,5 +31,10 @@ async def orchestrator_execute(req: ExecuteRequest) -> ExecuteResponse:
     plan = state.plans.get(req.plan_id)
     if plan is None:
         raise HTTPException(404, f"unknown plan_id: {req.plan_id}")
-    task_id = await execute_plan(plan, auth_id_hex=req.auth_id_hex, payer=req.payer)
+    try:
+        task_id = await execute_plan(plan, auth_id_hex=req.auth_id_hex, payer=req.payer)
+    except CapacityExhaustedError as e:
+        # No task was minted; the client should retry once a slot frees up.
+        logger.warning("execute rejected for plan %s: %s", req.plan_id, e)
+        raise HTTPException(503, "capacity_exhausted") from e
     return ExecuteResponse(task_id=task_id, read_token=state.task_tokens.get(task_id))
