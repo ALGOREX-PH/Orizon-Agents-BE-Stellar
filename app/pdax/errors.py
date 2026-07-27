@@ -91,3 +91,57 @@ ERROR_CODES: dict[str, str] = {
     "FeeCalculatorError": "Amount is outside the allowed fee limits.",
     "LimitsValidationError": "Transaction limit exceeded.",
 }
+
+
+# Stable Orizon-side client-facing codes, one per documented PDAX code above.
+# The router surfaces ONLY these snake_case codes — never the raw upstream
+# message/code/status, which is logged server-side instead (an upstream 401
+# must not read like an Orizon auth failure, and upstream text must not be
+# forwarded verbatim to clients).
+ORIZON_CODES: dict[str, str] = {
+    # ── Auth ──
+    "InvalidCredentials": "invalid_credentials",
+    "AccountLocked": "account_locked",
+    "ExpiredTemporaryPassword": "expired_temporary_password",
+    "InvalidMfaCode": "invalid_mfa_code",
+    "NotAuthorizedException": "not_authorized",
+    "BadRequestException": "bad_request",
+    # ── OTC / Trade ──
+    "OT000000": "trade_error",
+    "OT010003": "resource_not_found_or_expired",
+    "OT010006": "insufficient_balance",
+    "OT010008": "cannot_hold_amounts",
+    "OT010016": "asset_unavailable",
+    "OT010019": "minimum_quantity_limit",
+    "OT010020": "maximum_quantity_limit",
+    "OT010022": "withdrawal_limit_reached",
+    "OT010026": "malformed_parameters",
+    "OT010027": "below_minimum_quantity",
+    "OT010028": "above_maximum_quantity",
+    "OT010029": "invalid_quantity_step",
+    "OT010030": "invalid_price_step",
+    "ServerError": "duplicate_or_invalid_idempotency",
+    # ── Payments (fiat) ──
+    "PAP0001": "identifier_already_exists",
+    "PAP0002": "field_validation_error",
+    "PAP0004": "travel_rule_data_required",
+    "PAP0007": "amount_exceeds_limit",
+    "PAP0010": "invalid_bank_code",
+    "PAP0012": "payment_method_not_supported",
+    "PAP0013": "insufficient_balance",
+    "PAP0400": "bad_request",
+    "PAP0401": "upstream_unauthorized",
+    "PAP0500": "upstream_server_error",
+    "PAP0503": "upstream_unavailable",
+    "FailedRetrievingWallet": "wallet_retrieval_failed",
+    "FeeCalculatorError": "amount_outside_fee_limits",
+    "LimitsValidationError": "transaction_limit_exceeded",
+}
+
+
+def orizon_code(code: str | int | None) -> str:
+    """Stable snake_case client-facing code for a PDAX error code, falling
+    back to a generic "pdax_error" for anything undocumented."""
+    if code is None:
+        return "pdax_error"
+    return ORIZON_CODES.get(str(code), "pdax_error")

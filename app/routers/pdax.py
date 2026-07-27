@@ -5,11 +5,12 @@ to the frontend.
 Auth is handled server-side: the backend logs into PDAX with its own
 credentials and caches tokens, so the frontend never sees them. Endpoints
 mirror the PDAX domains: trade, funding, withdrawals, transactions, balances,
-and webhooks. PdaxError is translated to an HTTPException preserving the
-upstream status + message.
+and webhooks. PdaxError is translated to a curated HTTPException (stable
+snake_case codes, upstream detail logged server-side only — see _fail).
 """
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -38,7 +39,7 @@ from ..pdax import (
 from ..pdax import (
     withdrawals as pwd,
 )
-from ..pdax.errors import PdaxError
+from ..pdax.errors import PdaxError, orizon_code
 from ..pdax.models.common import Side
 from ..pdax.models.funding import FiatDepositRequest
 from ..pdax.models.ramp import OffRampRequest, OnRampRequest, _positive_decimal_str
@@ -62,9 +63,23 @@ router = APIRouter(prefix="/pdax", tags=["pdax"])
 secured = APIRouter(dependencies=[Depends(require_api_key)])
 
 
+logger = logging.getLogger(__name__)
+
+
 def _fail(e: PdaxError) -> HTTPException:
-    status = e.http_status if e.http_status and 400 <= e.http_status < 600 else 502
-    return HTTPException(status, detail=str(e))
+    """Translate a PdaxError into a curated client envelope.
+
+    The raw upstream message/code/status is logged server-side only; clients
+    get a stable snake_case Orizon code. Upstream 5xx and upstream auth
+    failures (401/403 — OUR PDAX credentials, never the caller's) collapse to
+    502 so they cannot be mistaken for an Orizon auth failure; genuine
+    client-input 4xx keep their status with the curated code.
+    """
+    logger.warning("pdax error: %s", e.to_dict())
+    status = e.http_status
+    if status is not None and 400 <= status < 500 and status not in (401, 403):
+        return HTTPException(status, detail=orizon_code(e.code))
+    return HTTPException(502, detail="upstream_unavailable")
 
 
 @router.get("/environment")
