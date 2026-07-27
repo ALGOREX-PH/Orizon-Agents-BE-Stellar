@@ -101,3 +101,17 @@ def get_pdax_client() -> PdaxClient:
     if _client is None:
         _client = PdaxClient()
     return _client
+
+
+async def aclose_pdax_client() -> None:
+    """Close the process-wide client's transport if it was ever created.
+
+    Called from app shutdown. Resets the singleton so any later call to
+    `get_pdax_client` lazily rebuilds it (relevant when the lifespan is
+    re-entered, e.g. across TestClient contexts).
+    """
+    global _client
+    if _client is None:
+        return
+    client, _client = _client, None
+    await client.aclose()
