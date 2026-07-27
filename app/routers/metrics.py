@@ -48,8 +48,10 @@ async def _avg_trust(agents: list[Agent]) -> float:
     return sum(onchain) / len(onchain) / 2000.0
 
 
-@router.get("/metrics/overview", response_model=OverviewMetrics)
+@router.get("/metrics/overview", response_model=OverviewMetrics, summary="Dashboard overview metrics")
 async def overview() -> OverviewMetrics:
+    """Blended dashboard metrics: live counters (agents online, completion,
+    trust) layered onto demo presentation baselines."""
     agents = state.list_agents()
     online = sum(1 for a in agents if a.status == "online")
     tasks = state.recent_tasks(limit=200)

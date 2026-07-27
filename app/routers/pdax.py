@@ -219,21 +219,23 @@ async def trade_order(req: OrderRequest) -> Order:
         raise _fail(e) from e
 
 
-@secured.get("/trade/orders/{order_id}")
+@secured.get("/trade/orders/{order_id}", summary="Get order details")
 async def trade_order_details(order_id: int) -> Order:
+    """Details of a single executed order by its PDAX order id."""
     try:
         return await pt.get_order(get_pdax_client(), order_id)
     except PdaxError as e:
         raise _fail(e) from e
 
 
-@secured.get("/trade/orders")
+@secured.get("/trade/orders", summary="List orders")
 async def trade_orders(
     page: int = 1,
     page_size: int = Query(10, alias="pageSize"),
     start_date: str | None = Query(None, alias="startDate"),
     end_date: str | None = Query(None, alias="endDate"),
 ) -> OrdersResponse:
+    """Executed orders, paginated and optionally filtered by date range."""
     try:
         orders = await pt.list_orders(
             get_pdax_client(),
