@@ -221,6 +221,22 @@ def test_cors_rejects_foreign_vercel_origins(client):
         assert "access-control-allow-origin" not in r.headers, origin
 
 
+def test_openapi_documents_error_envelope(client):
+    spec = client.get("/openapi.json").json()
+    assert spec["info"]["contact"]["name"] == "Orizon Agents"
+    # pydantic's AnyUrl normalizes a bare origin with a trailing slash
+    assert spec["info"]["contact"]["url"].rstrip("/") == "https://orizons.xyz"
+    assert spec["servers"][0]["url"] == "https://orizon-agents-be-stellar.onrender.com"
+    assert "ErrorEnvelope" in spec["components"]["schemas"]
+    assert set(spec["components"]["schemas"]["ErrorBody"]["properties"]) == {"code", "message", "request_id"}
+    # include_router merges the shared error responses into every operation.
+    for path, method in (("/api/agents", "get"), ("/api/orchestrator/decompose", "post")):
+        responses = spec["paths"][path][method]["responses"]
+        for status in ("429", "500"):
+            ref = responses[status]["content"]["application/json"]["schema"]["$ref"]
+            assert ref.endswith("ErrorEnvelope"), (path, status)
+
+
 def test_security_headers_on_api_response(client):
     r = client.get("/api/agents")
     assert r.status_code == 200

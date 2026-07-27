@@ -128,7 +128,15 @@ class SecurityHeadersMiddleware:
 app = FastAPI(
     title="Orizon Agents API",
     version="0.1.0",
-    description="The orchestration layer for autonomous digital labor.",
+    description=(
+        "The orchestration layer for autonomous digital labor: goal decomposition "
+        "across a priced agent network, Soroban-settled payments and reputation on "
+        "Stellar, and PDAX fiat on/off-ramping. Errors use a unified envelope — the "
+        'legacy "detail" key plus an "error" object with a stable code, message, '
+        "and request id."
+    ),
+    contact={"name": "Orizon Agents", "url": "https://orizons.xyz"},
+    servers=[{"url": "https://orizon-agents-be-stellar.onrender.com", "description": "production"}],
     lifespan=lifespan,
     openapi_tags=[
         {"name": "meta", "description": "Service identity and health/readiness probes."},
@@ -194,6 +202,31 @@ app.add_middleware(RequestContextMiddleware)
 # Details that are already machine-readable tokens ("invalid_api_key",
 # "build_failed") are promoted to the envelope's error code as-is.
 _SNAKE_TOKEN = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+
+
+class ErrorBody(BaseModel):
+    """Structured half of the unified error envelope."""
+
+    code: str
+    message: str
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    """Every error response body: the legacy FastAPI "detail" (string or
+    validation-error list) plus the structured "error" object."""
+
+    detail: Any
+    error: ErrorBody
+
+
+# Merged into every routed operation via include_router below, so the docs
+# show the envelope on the error statuses any endpoint can produce.
+_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorEnvelope, "description": "Request validation failed."},
+    429: {"model": ErrorEnvelope, "description": "Rate limited — retry after the indicated delay."},
+    500: {"model": ErrorEnvelope, "description": "Unhandled server error."},
+}
 
 
 def _error_envelope(detail: Any, code: str, message: str) -> dict[str, Any]:
@@ -269,15 +302,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-app.include_router(agents.router, prefix="/api")
-app.include_router(orchestrator.router, prefix="/api")
-app.include_router(tasks.router, prefix="/api")
-app.include_router(trace.router, prefix="/api")
-app.include_router(metrics.router, prefix="/api")
-app.include_router(flow.router, prefix="/api")
-app.include_router(payments.router, prefix="/api")
-app.include_router(stellar.router, prefix="/api")
-app.include_router(pdax.router, prefix="/api")
+app.include_router(agents.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(orchestrator.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(tasks.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(trace.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(metrics.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(flow.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(payments.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(stellar.router, prefix="/api", responses=_ERROR_RESPONSES)
+app.include_router(pdax.router, prefix="/api", responses=_ERROR_RESPONSES)
 
 
 @app.get("/", tags=["meta"], summary="Service identity ping")
