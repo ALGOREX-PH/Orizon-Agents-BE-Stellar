@@ -169,8 +169,11 @@ async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
                 quantity=_num(record.php_amount),
             ),
         )
+        quote_id = quote.quote_id
+        if not quote_id:
+            raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
         order = await trade.place_order(
-            client, OrderRequest(quote_id=quote.quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
+            client, OrderRequest(quote_id=quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
         )
         record.order_id = order.order_id
         record.usdc_amount = order.base_quantity
@@ -252,8 +255,11 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
                     quantity=_num(record.usdc_amount),
                 ),
             )
+            quote_id = quote.quote_id
+            if not quote_id:
+                raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
             order = await trade.place_order(
-                client, OrderRequest(quote_id=quote.quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
+                client, OrderRequest(quote_id=quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
             )
             record.order_id = order.order_id
             record.php_amount = order.total_amount
@@ -344,8 +350,8 @@ async def reconcile(client: PdaxClient, ramp_id: str) -> RampRecord | None:
                 record.status = "funded"
                 return await advance_onramp(client, record)
         elif record.direction == "offramp" and record.deposit_address:
-            txns = await transactions.crypto_transactions(client, type="crypto_in")
-            for t in txns:
+            crypto_txns = await transactions.crypto_transactions(client, type="crypto_in")
+            for t in crypto_txns:
                 if t.receiver_wallet_address == record.deposit_address and str(t.status).lower() == "completed":
                     record.status = "funded"
                     return await advance_offramp(client, record)
