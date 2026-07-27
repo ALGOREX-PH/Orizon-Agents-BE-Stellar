@@ -245,6 +245,90 @@ def test_offramp_lifecycle_via_webhook_event():
     asyncio.run(run())
 
 
+def _flaky_once_firm_quote(monkeypatch) -> dict:
+    """Patch trade.firm_quote_v2 to die once with a non-PdaxError (simulating a
+    bug or cancelled request escaping the advance step), then work normally."""
+    calls = {"n": 0}
+    real = ramp.trade.firm_quote_v2
+
+    async def flaky(client, req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("interrupted mid-advance")
+        return await real(client, req)
+
+    monkeypatch.setattr(ramp.trade, "firm_quote_v2", flaky)
+    return calls
+
+
+def test_reconcile_recovers_onramp_after_interrupted_advance(monkeypatch):
+    client = _onramp_client()
+    client.responses["v1/fiat/transactions"] = {
+        "data": [
+            {
+                "request_id": "rq1",
+                "identifier": "on-1",
+                "transaction_id": 1,
+                "amount": "500",
+                "method": "instapay_upay_cashin",
+                "mode": "CashIn",
+                "reference_number": "RF1",
+                "status": "COMPLETED",
+            }
+        ]
+    }
+    _flaky_once_firm_quote(monkeypatch)
+
+    async def run():
+        record = await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+        event = FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        )
+        with pytest.raises(RuntimeError):
+            await ramp.handle_event(client, event)
+        # The interrupted advance rolled the ramp back to a recoverable state
+        # instead of stranding it in funded/converting.
+        assert record.status == "awaiting_payment"
+        assert any(s.name == "advance" and s.status == "failed" for s in record.stages)
+        recovered = await ramp.reconcile(client, record.ramp_id)
+        assert recovered is not None
+        assert recovered.status == "completed"
+        assert recovered.order_id == 77
+
+    asyncio.run(run())
+
+
+def test_retried_webhook_recovers_offramp_and_keeps_payout(monkeypatch):
+    client = _offramp_client()
+    _flaky_once_firm_quote(monkeypatch)
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        event = CryptoEvent(
+            user_id="u1",
+            transaction_type="DEPOSIT",
+            amount=10.0,
+            asset="USDCXLM",
+            destination_address=record.deposit_address,
+            status="completed",
+        )
+        with pytest.raises(RuntimeError):
+            await ramp.handle_event(client, event)
+        assert record.status == "awaiting_payment"
+        # Payout PII must survive the interruption — the ramp is still live.
+        assert record.ramp_id in ramp._PAYOUTS
+        recovered = await ramp.handle_event(client, event)
+        assert recovered is not None
+        assert recovered.status == "completed"
+        assert ramp._PAYOUTS == {}  # ...and is dropped once settled
+
+    asyncio.run(run())
+
+
 def test_unmatched_event_is_ignored():
     client = _onramp_client()
 
