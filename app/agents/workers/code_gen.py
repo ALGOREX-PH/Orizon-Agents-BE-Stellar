@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from agno.agent import Agent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ...config import settings
 from ..model_factory import build_openai_chat
@@ -13,19 +13,87 @@ from .prompt_safety import worker_prompt
 
 logger = logging.getLogger(__name__)
 
+# Per-file ceiling for generated artifact content.
+#
+# Sized against what the repo actually ships: the largest hand-tuned demo kit
+# artifact (tetris.html) is ~38 KB, and the prompt's own length target of
+# 600–1000 lines lands around 60–80 KB. 120 KB is ~3x the biggest curated
+# artifact and still comfortably above any honest generation.
+#
+# The bound matters beyond one request: the full HTML is re-sent to the critic
+# (doubling token cost and latency) and then retained in `state.tasks` for 200
+# tasks on a 512 MB instance, so one runaway generation is not a one-off cost.
+MAX_ARTIFACT_CHARS = 120_000
+
+_TRUNCATION_NOTE = "\n<!-- orizon: artifact truncated at {n:,} characters -->\n"
+
+# What a clamped payload can weigh: the ceiling plus the truncation note and
+# any closing tags re-appended after the cut.
+_MAX_STORED_CHARS = MAX_ARTIFACT_CHARS + 256
+
+
+def clamp_artifact_content(content: str) -> str:
+    """Bound one artifact payload, degrading gracefully instead of raising.
+
+    An oversized generation is a quality failure, not a crash: the run has
+    already been paid for, so the artifact is cut back to the ceiling and
+    closed off so it still parses, rather than failing validation and taking
+    the whole workflow down with it.
+    """
+    if len(content) <= MAX_ARTIFACT_CHARS:
+        return content
+
+    logger.warning(
+        "artifact content of %d chars exceeds the %d ceiling — truncating",
+        len(content),
+        MAX_ARTIFACT_CHARS,
+    )
+    cut = content[:MAX_ARTIFACT_CHARS]
+    # Prefer a line boundary so the tail isn't a half-written statement.
+    nl = cut.rfind("\n")
+    if nl > MAX_ARTIFACT_CHARS // 2:
+        cut = cut[:nl]
+
+    tail = _TRUNCATION_NOTE.format(n=MAX_ARTIFACT_CHARS)
+    lower = cut.lower()
+    if lower.rfind("<script") > lower.rfind("</script"):
+        tail = "\n</script>" + tail
+    if "<body" in lower and "</body" not in lower:
+        tail += "</body>\n"
+    if "<html" in lower and "</html" not in lower:
+        tail += "</html>\n"
+    return cut + tail
+
 
 class ArtifactFile(BaseModel):
-    path: str
+    path: str = Field(..., max_length=200)
     language: str  # "html" | "css" | "js" | "tsx" | "python"
-    content: str
+    content: str = Field(..., max_length=_MAX_STORED_CHARS)
+
+    # Clamp BEFORE the length constraint runs, so an oversized generation is
+    # truncated rather than raising a ValidationError from inside the model
+    # layer (where it would surface as a failed step, not a big artifact).
+    @field_validator("content", mode="before")
+    @classmethod
+    def _bound_content(cls, v: Any) -> Any:
+        return clamp_artifact_content(v) if isinstance(v, str) else v
 
 
 class CodeArtifact(BaseModel):
     title: str = Field(..., max_length=80)
     summary: str = Field(..., max_length=280)
     files: list[ArtifactFile] = Field(..., min_length=1, max_length=5)
-    entry: str = Field(..., description="Path of the main file, matches one of files[].path")
-    preview_html: str = Field(..., description="Self-contained HTML document for the sandboxed preview iframe")
+    entry: str = Field(..., max_length=200, description="Path of the main file, matches one of files[].path")
+    preview_html: str = Field(
+        ...,
+        max_length=_MAX_STORED_CHARS,
+        description="Self-contained HTML document for the sandboxed preview iframe",
+    )
+
+    @field_validator("preview_html", mode="before")
+    @classmethod
+    def _bound_preview(cls, v: Any) -> Any:
+        return clamp_artifact_content(v) if isinstance(v, str) else v
 
 
 def coerce_artifact(content: Any) -> CodeArtifact:
