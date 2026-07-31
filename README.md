@@ -38,6 +38,7 @@ cp .env.example .env
 | method | path | purpose |
 | --- | --- | --- |
 | GET  | `/health`                            | liveness probe |
+| GET  | `/api/health`                        | the same liveness probe under the `/api` prefix |
 | GET  | `/readiness`                         | readiness probe — lists missing Stellar settings |
 | GET  | `/api/agents`                        | registry listing |
 | GET  | `/api/agents/{id}`                   | agent detail |
@@ -64,6 +65,8 @@ cp .env.example .env
 | POST | `/api/stellar/server/seal`           | backend-signed attestation seal (needs `X-API-Key`) |
 | GET  | `/api/stellar/new-id`                | fresh random 16-byte id for job/auth ids |
 | *    | `/api/pdax/*`                        | PDAX PHP↔crypto surface: trade, fiat/crypto funding, ramps, webhooks, reference data |
+
+`/api/health` exists because the frontend reaches this API only through a same-origin rewrite of `/api/*` — the root `/health` sits outside that prefix, so mirroring it under `/api` is what lets the browser and any external uptime monitor pointed at the product domain verify the backend is actually reachable. It returns the identical payload, makes no network or contract calls, and is exempt from rate limiting and access logging just like the root probe.
 
 ## Reputation system
 
