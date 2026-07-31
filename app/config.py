@@ -3,6 +3,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015"
 
+# Advertised service version — the FastAPI app's `version` and the liveness
+# payload both read it here so the number they report can never disagree.
+SERVICE_VERSION = "0.1.0"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
