@@ -1,7 +1,19 @@
+import logging
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015"
+
+# The PDAX environments app/pdax/config.py:BASE_URLS can resolve a base URL
+# for. Written out here rather than imported because that module does
+# `from ..config import settings`: importing it back would run it while this
+# module is still executing (Settings() is constructed at the bottom), so the
+# import would fail. BASE_URLS stays the source of truth —
+# tests/test_config_validators.py asserts the two agree so they cannot drift.
+PDAX_ENVIRONMENTS = ("production", "stage", "uat")
 
 # Advertised service version — the FastAPI app's `version` and the liveness
 # payload both read it here so the number they report can never disagree.
@@ -200,6 +212,45 @@ class Settings(BaseSettings):
                 "money-moving route is anonymous. Set API_KEY (in the Render dashboard for the "
                 "deployed service) and send it as the X-API-Key header, or remove the "
                 "credentials above to run a read-only/demo deployment."
+            )
+        return self
+
+    # ── Startup reports (log, never raise) ────────────────────────
+    # The validators above refuse to boot because the misconfiguration they
+    # catch would EXPOSE money routes or sign on the wrong network. The ones
+    # below catch a different class: values that are merely wrong, and whose
+    # only victim is the deployment itself. This service is live on mainnet
+    # with autoDeploy on, so a validator that wrongly rejects a real config
+    # takes the product down on merge — a cost that is never worth paying to
+    # improve an error message. They log loudly at startup instead, naming the
+    # variable and what breaks, so the operator does not have to trace a 500
+    # three layers down at request time.
+
+    @model_validator(mode="after")
+    def _report_unknown_pdax_environment(self) -> "Settings":
+        """Name a mistyped PDAX_ENVIRONMENT at startup, not at first use.
+
+        base_url() (app/pdax/config.py) raises RuntimeError lazily when the
+        first PDAX client is built, so a typo boots clean and then 500s
+        /api/pdax/environment and every other PDAX route.
+
+        Logged rather than raised: an unknown environment resolves to no base
+        URL at all, so the integration is inert — nothing authenticates, trades
+        or moves fiat — which makes this a broken deployment, not an exposure.
+        One sharp edge is called out in the message: an unknown value is also
+        not "production", so _production_webhooks_require_signature above stays
+        silent for it. An empty value is left alone; base_url() defaults it to
+        DEFAULT_ENVIRONMENT ("uat") exactly as it always has.
+        """
+        environment = (self.pdax_environment or "").strip().lower()
+        if environment and environment not in PDAX_ENVIRONMENTS:
+            logger.error(
+                "PDAX_ENVIRONMENT=%r is not a known PDAX environment (expected one of: %s). "
+                "No base URL can be resolved, so every /api/pdax/* route will fail on its "
+                "first call; an unrecognised value is also not treated as production, so the "
+                "webhook-signature requirement will not be enforced. Fix PDAX_ENVIRONMENT.",
+                self.pdax_environment,
+                ", ".join(PDAX_ENVIRONMENTS),
             )
         return self
 
