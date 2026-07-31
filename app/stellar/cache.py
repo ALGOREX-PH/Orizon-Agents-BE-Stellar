@@ -50,6 +50,16 @@ _NEGATIVE_TTL_SECONDS = 2.5
 # self-clean via their done callbacks.)
 _MAX_ENTRIES = 512
 
+# How far below the cap an over-cap sweep evicts. Cache keys are caller-
+# influenced (`agent:{id}`, `repstate:{id}`, `attestation:{hex}` — unbounded
+# distinct values), so a stream of unique keys that are all still FRESH is
+# reachable: expiry-only sweeping would free nothing, leaving both dicts to
+# grow without bound AND making every later miss pay a full scan that
+# reclaims nothing. Evicting to a low-water mark rather than exactly to the
+# cap amortizes the ordering pass over the next `_EVICT_HEADROOM`
+# admissions, so the fix cannot itself become the CPU cliff it prevents.
+_EVICT_HEADROOM = 64
+
 
 async def get_or_set(
     key: str,
@@ -116,10 +126,37 @@ def _on_flight_done(key: str, task: asyncio.Task[Any]) -> None:
 
 
 def _sweep(now: float) -> None:
+    """Reclaim space: expired entries first, then, if the combined size is
+    still over the cap, the entries closest to expiring.
+
+    The second pass is what makes the cache actually bounded. Expiry order is
+    the right eviction key here and needs no extra bookkeeping: within one TTL
+    class the smallest expiry IS the oldest write, and across classes it
+    prefers dropping whatever has the least remaining life — a 3 s read that
+    is about to lapse anyway goes before a 15 s one just written.
+
+    Evicting an entry with a live flight is harmless: the producer writes its
+    result back on completion.
+    """
     for k in [k for k, (exp, _) in _store.items() if exp <= now]:
         del _store[k]
     for k in [k for k, entry in _failures.items() if entry[0] <= now]:
         del _failures[k]
+
+    overflow = len(_store) + len(_failures) - max(_MAX_ENTRIES - _EVICT_HEADROOM, 0)
+    if overflow <= 0:
+        return
+    # One ordering over both dicts, so the cap is enforced on their combined
+    # size rather than on each independently. The middle element tags which
+    # dict a key came from (and keeps the sort total for equal expiries).
+    victims = sorted(
+        [(exp, 0, k) for k, (exp, _) in _store.items()] + [(entry[0], 1, k) for k, entry in _failures.items()]
+    )[:overflow]
+    for _expiry, in_failures, key in victims:
+        if in_failures:
+            _failures.pop(key, None)
+        else:
+            _store.pop(key, None)
 
 
 def clear() -> None:
