@@ -1,13 +1,17 @@
 """API tests for the task routes: the polled list stays lightweight (no
-artifact), while the per-task and artifact routes still serve the full payload.
+artifact), the per-task and artifact routes still serve the full payload, and
+`started` is a live relative age derived from `started_at` rather than a string
+frozen at creation time.
 """
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from app.main import app
-from app.schemas import Task
+from app.schemas import Task, humanize_age
 from app.security import RateLimitMiddleware
 from app.state import state
 
@@ -62,7 +66,6 @@ def _seed(task_id: str = "tsk_list_shape") -> Task:
         agents=2,
         spent=0.25,
         status="complete",
-        started="just now",
         artifact=_ARTIFACT,
         charge_tx="charge123",
         proof_tx="proof456",
@@ -121,3 +124,67 @@ def test_artifact_route_still_returns_the_artifact(client):
     assert body["artifact"] == _ARTIFACT
     assert body["charge_tx"] == "charge123"
     assert body["proof_tx"] == "proof456"
+
+
+# ── (c) `started` is a live age, not a frozen string ────────────
+def _aged(task_id: str, age_seconds: float) -> Task:
+    task = Task(
+        id=task_id,
+        intent="build a demo page",
+        agents=1,
+        spent=0.0,
+        status="complete",
+        started_at=time.time() - age_seconds,
+    )
+    state.add_task(task)
+    return task
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "expected"),
+    [(0.0, "just now"), (9.5, "just now"), (30.0, "30s ago"), (125.0, "2m ago"), (7_200.0, "2h ago")],
+)
+def test_started_reflects_elapsed_time(client, age_seconds, expected):
+    task = _aged("tsk_started_age", age_seconds)
+    row = next(t for t in client.get("/api/tasks").json() if t["id"] == task.id)
+    assert row["started"] == expected
+
+
+def test_started_of_an_old_task_is_not_just_now(client):
+    """The regression: `started` was written once at creation and never
+    updated, so every row — including hours-old runs — read "just now"."""
+    task = _aged("tsk_started_old", 5 * 3_600)
+    row = next(t for t in client.get("/api/tasks").json() if t["id"] == task.id)
+    assert row["started"] == "5h ago"
+    assert row["started"] != "just now"
+
+
+def test_started_at_is_served_as_a_machine_readable_timestamp(client):
+    started_at = time.time() - 90.0
+    state.add_task(Task(id="tsk_started_ts", intent="i", agents=1, spent=0.0, status="running", started_at=started_at))
+    row = next(t for t in client.get("/api/tasks").json() if t["id"] == "tsk_started_ts")
+    assert row["started_at"] == pytest.approx(started_at)
+
+
+def test_started_is_derived_on_every_serialization():
+    # Not stored: two dumps of the same instance, taken at different times,
+    # disagree — which is exactly why the field can no longer go stale.
+    task = Task(id="tsk_started_derived", intent="i", agents=1, spent=0.0, status="running")
+    assert task.model_dump()["started"] == "just now"
+    task.started_at -= 3_600
+    assert task.model_dump()["started"] == "1h ago"
+
+
+def test_started_survives_the_finalize_model_copy():
+    task = Task(id="tsk_started_copy", intent="i", agents=1, spent=0.0, status="running")
+    task.started_at -= 600
+    finalized = task.model_copy(update={"status": "complete"})
+    assert finalized.started == "10m ago"
+
+
+def test_humanize_age_bands():
+    assert humanize_age(-5.0) == "just now"  # clock skew
+    assert humanize_age(59.9) == "59s ago"
+    assert humanize_age(3_599.0) == "59m ago"
+    assert humanize_age(86_399.0) == "23h ago"
+    assert humanize_age(200_000.0) == "2d ago"

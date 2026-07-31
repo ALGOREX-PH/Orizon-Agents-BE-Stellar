@@ -100,7 +100,7 @@ async def execute_plan(
         agents=len(plan.plan.steps),
         spent=0.0,
         status="running",
-        started="just now",
+        # started_at defaults to now; `started` is derived from it per response.
     )
     state.add_task(task)
     state.task_tokens[task_id] = read_token
