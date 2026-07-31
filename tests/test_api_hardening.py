@@ -212,6 +212,24 @@ def test_rate_limiter_throttles_after_limit():
     blocked = limited.get("/hit")
     assert blocked.status_code == 429
     assert "retry-after" in {k.lower() for k in blocked.headers}
+    # The frontend backs off on this hint (lib/use-polling.ts), so it has to
+    # be a positive whole number of seconds inside the window, not a 0 that
+    # would invite an immediate retry.
+    retry_after = int(blocked.headers["retry-after"])
+    assert 1 <= retry_after <= 60
+    assert blocked.headers["x-ratelimit-remaining"] == "0"
+    assert blocked.json()["error"]["code"] == "rate_limited"
+
+
+def test_default_budget_seats_a_realistic_number_of_dashboard_tabs():
+    """The budget is currently whole-service, not per visitor (client_key()
+    resolves to a constant until TRUSTED_PROXY_HOPS is tuned), so the default
+    is pinned against the console's real cost: an open dashboard tab polls two
+    endpoints every 5 s = 24 req/min. 120/min seated five tabs, which the live
+    product exceeds routinely."""
+    tab_requests_per_minute = 2 * (60 // 5)
+    assert tab_requests_per_minute == 24
+    assert settings.rate_limit_per_minute // tab_requests_per_minute >= 50
 
 
 def test_rate_limiter_exempts_health():
@@ -222,6 +240,27 @@ def test_rate_limiter_exempts_health():
     limited = TestClient(RateLimitMiddleware(inner, limit=1, window_seconds=60))
     for _ in range(5):
         assert limited.get("/health").status_code == 200
+
+
+def test_rate_limiter_exempts_every_probe_path():
+    """All four exempt paths stay exempt, at any budget: the proxied
+    `/api/health` especially, since an uptime monitor polling it through the
+    frontend would otherwise spend the shared budget on every visitor's
+    behalf."""
+    from app.security import EXEMPT_PATHS
+
+    assert EXEMPT_PATHS == frozenset({"/", "/health", "/readiness", "/api/health"})
+
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[Route(path, ok) for path in sorted(EXEMPT_PATHS)])
+    limited = TestClient(RateLimitMiddleware(inner, limit=1, window_seconds=60))
+    for path in sorted(EXEMPT_PATHS):
+        for _ in range(4):
+            r = limited.get(path)
+            assert r.status_code == 200, (path, r.status_code)
+            assert "x-ratelimit-limit" not in r.headers, path
 
 
 def test_rate_limit_headers_on_allowed_response(client):

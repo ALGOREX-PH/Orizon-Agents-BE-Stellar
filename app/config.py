@@ -59,8 +59,28 @@ class Settings(BaseSettings):
     # the public demo stays fully open. When enabled, GET task/trace routes
     # require the per-task read token minted at execute (or a valid API key).
     task_auth_required: bool = False
-    # Per-client-IP sliding-window request budget (in-process, per worker).
-    rate_limit_per_minute: int = 120
+    # Sliding-window request budget (in-process, per worker), spent per key
+    # resolved by app/security.py client_key().
+    #
+    # Sized as a WHOLE-SERVICE budget, because that is what it currently is:
+    # trusted_proxy_hops defaults to 0, so the key is the constant address our
+    # own edge appends and every visitor draws on one bucket. The console's
+    # real cost drives the number — an open dashboard tab polls two endpoints
+    # every 5 s (24 req/min), /app/reputation adds a 4-request burst on mount
+    # and 3 more on every window focus, and both liveness probes are exempt
+    # (EXEMPT_PATHS), so a tab costs ~24/min steady with small bursts on
+    # navigation. 1200/min therefore seats ~50 concurrent tabs before anyone
+    # is throttled, against the 5 that 120/min allowed — a demo that gets
+    # linked somewhere stays usable instead of 429ing its own visitors.
+    #
+    # It still bounds abuse: 20 req/s is a coarse flood cut, and it is not the
+    # cost control for the expensive routes — orchestrator_max_concurrent caps
+    # in-flight workflows (503 capacity_exhausted) and contract reads are
+    # TTL-cached, so a flood buys cheap cached JSON, not LLM calls or RPC.
+    # Once trusted_proxy_hops is tuned this becomes per-visitor and can come
+    # back down; the frontend backs off on 429 and honours Retry-After, so a
+    # tightened limit degrades cadence rather than breaking the console.
+    rate_limit_per_minute: int = 1200
     # How many TRAILING X-Forwarded-For entries belong to this deployment's own
     # infrastructure, and are therefore dropped when app/security.py resolves
     # the caller. 0 — the default — keys on the LAST entry, exactly as this

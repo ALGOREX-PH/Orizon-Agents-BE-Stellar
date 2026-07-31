@@ -407,12 +407,18 @@ class BodyLimitMiddleware:
 
 
 class RateLimitMiddleware:
-    """Sliding-window per-client-IP limiter. In-process only (single worker).
+    """Sliding-window limiter, keyed by client_key(). In-process (1 worker).
 
-    Timestamps per IP live in a dict of deques; old entries are pruned on
-    each hit and the whole table is swept periodically so idle IPs don't
+    Timestamps per key live in a dict of deques; old entries are pruned on
+    each hit and the whole table is swept periodically so idle keys don't
     accumulate. All mutation happens synchronously between awaits, so it is
     safe under a single asyncio event loop without locks.
+
+    How much this limits *per visitor* rather than *in total* is entirely
+    decided by TRUSTED_PROXY_HOPS — see client_key(). At the default of 0 the
+    key is a constant this deployment's edge wrote, so `rate_limit_per_minute`
+    is one budget for the whole service; the default limit is sized for that
+    reading.
     """
 
     _SWEEP_EVERY = 1024  # requests between full-table sweeps
