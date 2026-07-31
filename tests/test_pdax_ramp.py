@@ -350,7 +350,10 @@ def test_malformed_quote_envelope_fails_ramp_cleanly():
         advanced = await ramp.handle_event(client, event)
         assert advanced is not None
         assert advanced.status == "failed"
-        assert "malformed PDAX response" in (advanced.error or "")
+        # A code, never the upstream text — the record is returned verbatim by
+        # GET /api/pdax/ramp/{ramp_id}.
+        assert advanced.error == "bad_upstream_shape"
+        assert [s.detail for s in advanced.stages if s.status == "failed"] == ["bad_upstream_shape"]
 
     asyncio.run(run())
 
@@ -374,9 +377,59 @@ def test_malformed_quote_fields_fail_ramp_cleanly():
         assert advanced is not None
         assert advanced.status == "failed"
         assert record.status == "failed"
-        assert "malformed PDAX response" in (advanced.error or "")
+        assert advanced.error == "bad_upstream_shape"
 
     asyncio.run(run())
+
+
+UPSTREAM_TEXT = "Insufficient balance in institutional account 9912."
+
+
+def _failing_onramp_client() -> FakePdaxClient:
+    client = _onramp_client()
+    client.responses["v2/trade/quote"] = PdaxError(UPSTREAM_TEXT, code="OT010006", http_status=400)
+    return client
+
+
+async def _run_failing_onramp(client) -> object:
+    await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+    return await ramp.handle_event(
+        client,
+        FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        ),
+    )
+
+
+def test_failed_ramp_record_carries_a_code_not_upstream_text(caplog):
+    """GET /api/pdax/ramp/{ramp_id} returns the record verbatim, so the record
+    owes the client the same thing `_fail` does: a stable snake_case code, and
+    never the upstream message."""
+    client = _failing_onramp_client()
+    with caplog.at_level(logging.ERROR, logger="app.pdax.ramp"):
+        advanced = asyncio.run(_run_failing_onramp(client))
+    assert advanced.status == "failed"
+    assert advanced.error == "insufficient_balance"
+    failed_details = [s.detail for s in advanced.stages if s.status == "failed"]
+    assert failed_details == ["insufficient_balance"]
+    assert all(UPSTREAM_TEXT not in (s.detail or "") for s in advanced.stages)
+    # The raw text is not lost — it lives in the server-side log line only.
+    assert any(UPSTREAM_TEXT in r.getMessage() for r in caplog.records)
+
+
+def test_ramp_status_route_never_returns_upstream_text(client):
+    """End-to-end: the same doctrine holds through the HTTP surface."""
+    fake = _failing_onramp_client()
+    record = asyncio.run(_run_failing_onramp(fake))
+    r = client.get(f"/api/pdax/ramp/{record.ramp_id}")
+    assert r.status_code == 200
+    assert "9912" not in r.text
+    assert "Insufficient balance" not in r.text
+    assert r.json()["error"] == "insufficient_balance"
 
 
 def test_unmatched_event_is_warned_not_silently_dropped(caplog):
@@ -457,6 +510,6 @@ def test_advance_offramp_without_payout_fails_cleanly():
         ramp._PAYOUTS.clear()  # simulate a restart losing the payout stash
         advanced = await ramp.advance_offramp(client, record)
         assert advanced.status == "failed"
-        assert advanced.error == "missing payout details"
+        assert advanced.error == "missing_payout_details"
 
     asyncio.run(run())

@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from ..config import settings
 from . import funding, money, ramp_store, trade, transactions, withdrawals
 from .client import PdaxClient
-from .errors import PdaxError
+from .errors import PdaxError, orizon_code
 from .models.funding import FiatDepositRequest
 from .models.ramp import (
     FundingQuote,
@@ -42,6 +42,12 @@ PHP = "PHP"
 
 logger = logging.getLogger(__name__)
 
+# Codes raised by our own adapters rather than by PDAX (trade._unwrap, the
+# quote guard below, the withdraw-request guard). They are already stable
+# snake_case identifiers carrying no upstream text, so they reach the client
+# unmapped; everything else goes through the ORIZON_CODES table.
+_INTERNAL_CODES = frozenset({"bad_upstream_shape", "invalid_quote", "invalid_withdraw_request"})
+
 
 def _num(x: object) -> str:
     """PDAX amounts are strings; format via Decimal so a float like 17.18 never
@@ -49,8 +55,18 @@ def _num(x: object) -> str:
     return money.format_amount(x)
 
 
-def _log_failure(record: RampRecord, stage: str, e: PdaxError) -> None:
-    """Write the one line that makes a failed conversion diagnosable.
+def _client_code(e: PdaxError) -> str:
+    """The stable snake_case code a client may see for a failed ramp stage —
+    never the upstream message, per the doctrine in routers/pdax.py `_fail`."""
+    code = str(e.code) if e.code is not None else ""
+    if code in _INTERNAL_CODES:
+        return code
+    return orizon_code(e.code)
+
+
+def _log_failure(record: RampRecord, stage: str, e: PdaxError) -> str:
+    """Write the one line that makes a failed conversion diagnosable, and
+    return the client-safe code to store on the ramp.
 
     A ramp moves real money: `place_order` can succeed (the PHP is already
     converted) and the payout leg fail straight after, leaving funds parked in
@@ -59,21 +75,28 @@ def _log_failure(record: RampRecord, stage: str, e: PdaxError) -> None:
     process restarts — so every failure path names the ramp, the stage, the
     direction, both amounts, and the upstream code/message/request id.
 
+    This is also the *only* place the raw upstream message is written down:
+    the record itself keeps the mapped code, since GET /api/pdax/ramp/{id}
+    returns it verbatim to the client.
+
     Deliberately absent: beneficiary account numbers and account names, and
     sender/beneficiary names. The API already masks those (see
     `_mask_account_numbers` in routers/pdax.py) and the log is held to the
     same standard.
     """
+    code = _client_code(e)
     logger.error(
-        "ramp stage failed: ramp_id=%s direction=%s stage=%s php=%s usdc=%s identifier=%s upstream=%s",
+        "ramp stage failed: ramp_id=%s direction=%s stage=%s code=%s php=%s usdc=%s identifier=%s upstream=%s",
         record.ramp_id,
         record.direction,
         stage,
+        code,
         _num(record.php_amount),
         _num(record.usdc_amount),
         record.identifier,
         e.to_dict(),
     )
+    return code
 
 
 async def estimate(
@@ -157,8 +180,8 @@ async def start_onramp(client: PdaxClient, req: OnRampRequest) -> RampRecord:
         record.usdc_amount, record.price = est.usdc_amount, est.price
         ramp_store.add_stage(record, "estimate", "success", f"{est.usdc_amount} USDC @ {est.price}")
     except PdaxError as e:
-        _log_failure(record, "estimate", e)
-        ramp_store.add_stage(record, "estimate", "failed", str(e))
+        code = _log_failure(record, "estimate", e)
+        ramp_store.add_stage(record, "estimate", "failed", code)
 
     deposit = FiatDepositRequest(
         amount=req.php_amount,
@@ -181,10 +204,9 @@ async def start_onramp(client: PdaxClient, req: OnRampRequest) -> RampRecord:
         record.status = "awaiting_payment"
         ramp_store.add_stage(record, "fiat_deposit", "success", result.reference_number)
     except PdaxError as e:
-        _log_failure(record, "fiat_deposit", e)
         record.status = "failed"
-        record.error = str(e)
-        ramp_store.add_stage(record, "fiat_deposit", "failed", str(e))
+        record.error = _log_failure(record, "fiat_deposit", e)
+        ramp_store.add_stage(record, "fiat_deposit", "failed", record.error)
     return ramp_store.save(record)
 
 
@@ -213,9 +235,8 @@ async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         record.price = order.price
         ramp_store.add_stage(record, "buy_usdc", "success", f"order {order.order_id}")
     except PdaxError as e:
-        _log_failure(record, "buy_usdc", e)
-        record.status, record.error = "failed", str(e)
-        ramp_store.add_stage(record, "buy_usdc", "failed", str(e))
+        record.status, record.error = "failed", _log_failure(record, "buy_usdc", e)
+        ramp_store.add_stage(record, "buy_usdc", "failed", record.error)
         return ramp_store.save(record)
 
     record.status = "settling"
@@ -235,9 +256,8 @@ async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
     except PdaxError as e:
         # The PHP is already converted at this point — the USDC exists and did
         # not reach the buyer. Loudest failure in the system.
-        _log_failure(record, "withdraw_usdcxlm", e)
-        record.status, record.error = "failed", str(e)
-        ramp_store.add_stage(record, "withdraw_usdcxlm", "failed", str(e))
+        record.status, record.error = "failed", _log_failure(record, "withdraw_usdcxlm", e)
+        ramp_store.add_stage(record, "withdraw_usdcxlm", "failed", record.error)
     return ramp_store.save(record)
 
 
@@ -256,8 +276,8 @@ async def start_offramp(client: PdaxClient, req: OffRampRequest) -> RampRecord:
         record.php_amount, record.price = est.php_amount, est.price
         ramp_store.add_stage(record, "estimate", "success", f"{est.php_amount} PHP @ {est.price}")
     except PdaxError as e:
-        _log_failure(record, "estimate", e)
-        ramp_store.add_stage(record, "estimate", "failed", str(e))
+        code = _log_failure(record, "estimate", e)
+        ramp_store.add_stage(record, "estimate", "failed", code)
 
     try:
         addr = await funding.crypto_deposit_address(client, USDCXLM)
@@ -266,9 +286,8 @@ async def start_offramp(client: PdaxClient, req: OffRampRequest) -> RampRecord:
         record.status = "awaiting_payment"
         ramp_store.add_stage(record, "deposit_address", "success", addr.address)
     except PdaxError as e:
-        _log_failure(record, "deposit_address", e)
-        record.status, record.error = "failed", str(e)
-        ramp_store.add_stage(record, "deposit_address", "failed", str(e))
+        record.status, record.error = "failed", _log_failure(record, "deposit_address", e)
+        ramp_store.add_stage(record, "deposit_address", "failed", record.error)
     # Stash the beneficiary payout details for the advance step.
     _PAYOUTS[record.ramp_id] = req
     return ramp_store.save(record)
@@ -288,7 +307,8 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
             _num(record.usdc_amount),
             record.identifier,
         )
-        record.status, record.error = "failed", "missing payout details"
+        record.status, record.error = "failed", "missing_payout_details"
+        ramp_store.add_stage(record, "fiat_withdraw", "failed", record.error)
         return ramp_store.save(record)
 
     try:
@@ -315,9 +335,8 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
             record.price = order.price
             ramp_store.add_stage(record, "sell_usdc", "success", f"order {order.order_id}")
         except PdaxError as e:
-            _log_failure(record, "sell_usdc", e)
-            record.status, record.error = "failed", str(e)
-            ramp_store.add_stage(record, "sell_usdc", "failed", str(e))
+            record.status, record.error = "failed", _log_failure(record, "sell_usdc", e)
+            ramp_store.add_stage(record, "sell_usdc", "failed", record.error)
             return ramp_store.save(record)
 
         record.status = "settling"
@@ -349,9 +368,8 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         except PdaxError as e:
             # The USDC is already sold — the pesos exist and did not reach the
             # beneficiary. Loudest failure on this side.
-            _log_failure(record, "fiat_withdraw", e)
-            record.status, record.error = "failed", str(e)
-            ramp_store.add_stage(record, "fiat_withdraw", "failed", str(e))
+            record.status, record.error = "failed", _log_failure(record, "fiat_withdraw", e)
+            ramp_store.add_stage(record, "fiat_withdraw", "failed", record.error)
         return ramp_store.save(record)
     finally:
         # Payout PII (names, bank code, account number) lives only while the
@@ -450,12 +468,9 @@ async def _advance_guarded(
             exc_info=e,
         )
         record.status = "awaiting_payment"
-        ramp_store.add_stage(
-            record,
-            "advance",
-            "failed",
-            f"interrupted ({type(e).__name__}); ramp returned to awaiting_payment",
-        )
+        # Stage details reach the client verbatim, so record the stable code —
+        # the exception type and traceback are in the log line above.
+        ramp_store.add_stage(record, "advance", "failed", "advance_interrupted")
         ramp_store.save(record)
         raise
 
