@@ -363,18 +363,45 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
             _PAYOUTS.pop(record.ramp_id, None)
 
 
+def _warn_unmatched(event: CryptoEvent | FiatEvent, target: str | None) -> None:
+    """A settled deposit that belongs to no tracked ramp: money moved upstream
+    and nothing here will act on it.
+
+    Ramps are process-local (see ramp_store), so a buyer who pays half an hour
+    after starting an on-ramp can settle against a restarted process and land
+    here. This line is then the only record that the money arrived — it names
+    the identifier, event type and amount so the ramp can be settled by hand.
+    """
+    logger.warning(
+        "unmatched settlement event: kind=%s type=%s status=%s amount=%s asset=%s identifier=%s target=%s",
+        "fiat" if isinstance(event, FiatEvent) else "crypto",
+        event.transaction_type,
+        event.status,
+        event.amount,
+        event.asset,
+        event.identifier,
+        target,
+    )
+
+
 def _match(
     event: CryptoEvent | FiatEvent,
 ) -> tuple[RampRecord | None, Callable[[PdaxClient, RampRecord], Awaitable[RampRecord]] | None]:
-    """Find the ramp + advance function a settlement event belongs to."""
+    """Find the ramp + advance function a settlement event belongs to.
+
+    Events we were never going to act on (withdrawals, non-final statuses) are
+    dropped quietly; a *completed deposit* with no matching ramp is warned
+    about, because that one means unclaimed funds.
+    """
     if isinstance(event, FiatEvent):
         if "DEPOSIT" not in event.transaction_type.upper():
             return None, None
-        if str(event.status).upper() != "COMPLETED" or not event.identifier:
+        if str(event.status).upper() != "COMPLETED":
             return None, None
-        record = ramp_store.find_by_identifier(event.identifier)
+        record = ramp_store.find_by_identifier(event.identifier) if event.identifier else None
         if record and record.direction == "onramp":
             return record, advance_onramp
+        _warn_unmatched(event, None)
         return None, None
 
     # CryptoEvent — match an off-ramp by its USDCXLM deposit address.
@@ -389,6 +416,7 @@ def _match(
             and record.deposit_address == event.destination_address
         ):
             return record, advance_offramp
+    _warn_unmatched(event, event.destination_address)
     return None, None
 
 

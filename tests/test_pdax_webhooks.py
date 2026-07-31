@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import uuid
 
 import pytest
@@ -117,6 +118,23 @@ def test_valid_hmac_accepts_and_parses_event(client, monkeypatch):
     assert body["event"]["asset"] == "USDCXLM"
     assert body["event"]["amount"] == 5.0
     assert body["ramp"] is None  # no waiting ramp matched
+    assert body["matched"] is False
+
+
+def test_unmatched_settlement_is_200_but_flagged_and_logged(client, monkeypatch, caplog):
+    """PDAX retries non-2xx, and ramp state is process-local: an event that
+    matches nothing now will match nothing on redelivery either. So the
+    delivery is accepted (no retry storm) but reported as matched=false and
+    logged at warning, which is what an operator acts on."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    payload = _crypto_payload()
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        r = _post_signed(client, payload)
+    assert r.status_code == 200
+    assert r.json()["matched"] is False
+    warnings = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.WARNING]
+    assert any("unmatched settlement event" in m and payload["identifier"] in m for m in warnings), warnings
 
 
 def test_duplicate_delivery_is_rejected_idempotently(client, monkeypatch):
