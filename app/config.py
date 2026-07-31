@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     task_auth_required: bool = False
     # Per-client-IP sliding-window request budget (in-process, per worker).
     rate_limit_per_minute: int = 120
+    # How many TRAILING X-Forwarded-For entries belong to this deployment's own
+    # infrastructure, and are therefore dropped when app/security.py resolves
+    # the caller. 0 — the default — keys on the LAST entry, exactly as this
+    # service always has, so nothing changes until the value is deliberately
+    # tuned. Both directions of error are silent and opposite (too low: the key
+    # is a constant our edge wrote, so every visitor shares one rate-limit
+    # bucket and the access log's client= cannot attribute abuse; too high: the
+    # key is one the CALLER wrote, so the limiter is bypassed by sending a
+    # header). Only tune it against a chain actually observed from this edge —
+    # see forwarded_chain_samples below and client_key()'s docstring.
+    trusted_proxy_hops: int = 0
     # Ceiling on concurrently running workflows (each fans out LLM calls).
     # execute returns 503 "capacity_exhausted" once this many are in flight.
     orchestrator_max_concurrent: int = 8

@@ -8,6 +8,7 @@ from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
+from app.config import settings
 from app.main import app
 from app.security import RateLimitMiddleware
 
@@ -62,6 +63,12 @@ def test_non_ascii_api_key_is_401_not_500(client, hermetic_settings):
 
 
 def test_rate_limiter_keys_on_last_forwarded_hop():
+    """Pins the shipped default end-to-end: TRUSTED_PROXY_HOPS=0 drops no
+    trailing entries, so the limiter buckets on the LAST hop exactly as it
+    always has. tests/test_proxy_trust.py covers the tuned settings; this
+    guards the "merging changes nothing" promise through real middleware."""
+    assert settings.trusted_proxy_hops == 0
+
     async def ok(request):
         return PlainTextResponse("ok")
 

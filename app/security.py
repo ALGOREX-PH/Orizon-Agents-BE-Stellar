@@ -4,6 +4,10 @@ Lightweight, dependency-free hardening primitives.
 - `require_api_key` — optional FastAPI dependency. When `settings.api_key`
   is unset (the default for the public demo) it is a no-op; when set, the
   request must carry a matching `X-API-Key` header or it is rejected 401.
+- `client_key` — resolves who a request belongs to from the X-Forwarded-For
+  chain, with the proxy trust boundary set by `TRUSTED_PROXY_HOPS`. Both the
+  limiter and the access log key on it, so its docstring is where the
+  consequences of getting that boundary wrong are written down.
 - `RateLimitMiddleware` — per-client-IP sliding-window rate limiter as a
   pure ASGI middleware (no external deps). Window/limit come from settings;
   liveness paths and CORS preflights are exempt. Rate-limited responses
@@ -71,19 +75,77 @@ class RequestIdLogFilter(logging.Filter):
         return True
 
 
-def client_key(scope: dict) -> str:
+# Resolved key for a forwarded chain that is too short to contain a client
+# entry once the trusted hops are removed. A literal, never an address: it
+# cannot collide with a real client, and seeing it as `client=` in the access
+# log is itself the signal that TRUSTED_PROXY_HOPS is set higher than the
+# number of entries this edge actually appends.
+CHAIN_TOO_SHORT_KEY = "forwarded-chain-too-short"
+
+
+def _trusted_hops() -> int:
+    """Configured trailing-hop count, floored at 0 (a negative value would
+    index back into the caller-controlled end of the chain)."""
+    return max(0, settings.trusted_proxy_hops)
+
+
+def client_key(scope: dict, hops: int | None = None) -> str:
     """Resolve the client key used for rate limiting and access logs.
 
-    Keys on the LAST X-Forwarded-For hop: proxies append, so the leftmost
-    entries are client-controlled — trusting them would let a caller rotate
-    fake IPs to bypass the limiter and bloat the bucket table.
+    X-Forwarded-For is append-only: each proxy adds the address of the peer it
+    received the request from, so the chain reads
+
+        <anything the caller sent>, <caller's address>, <our edge>, <...>
+
+    and only the RIGHTMOST entries were written by infrastructure we control.
+    `TRUSTED_PROXY_HOPS` says how many of those trailing entries are ours; they
+    are dropped, and the next entry to the left is the client.
+
+    The count cannot be guessed — it is a property of the deployment (Vercel's
+    rewrite proxy and Render's edge both rewrite this header, and how many
+    entries each contributes is not observable from outside) — and BOTH ways of
+    getting it wrong are silent:
+
+    * **Too few hops trusted.** The resolved entry is one our own edge wrote,
+      which is the same value for every visitor. `rate_limit_per_minute` then
+      behaves as a single budget for the WHOLE service rather than per visitor
+      — a handful of open dashboard tabs can 429 everyone — and `client=` is a
+      constant in every access line, so abuse cannot be attributed during an
+      incident.
+    * **Too many hops trusted.** The resolved entry is one the CALLER wrote.
+      Anyone can then mint a fresh bucket per request by rotating a header
+      value: the limiter stops limiting, and the bucket table grows with
+      attacker-chosen keys.
+
+    The default of 0 reproduces the original behaviour exactly — the last entry,
+    whatever it is — so deploying this changes nothing until the hop count is
+    tuned against a chain actually observed from production (the sampler below
+    logs one; see FORWARDED_CHAIN_SAMPLES).
+
+    Two degenerate chains are handled deliberately rather than by clamping:
+
+    * Fewer entries than the configured hop count leaves no client entry at
+      all. That resolves to CHAIN_TOO_SHORT_KEY, NOT to the leftmost entry —
+      the leftmost is precisely the one the caller controls, so clamping there
+      would turn a too-high setting into a limiter bypass instead of a loud,
+      visible misconfiguration.
+    * Empty entries (a stray `,` or a trailing comma) are dropped before
+      indexing. Falling through to `scope["client"]` on that input would be
+      unsafe here: uvicorn runs with `--proxy-headers --forwarded-allow-ips='*'`
+      (render.yaml), and its ProxyHeadersMiddleware then overwrites
+      scope["client"] with the LEFTMOST X-Forwarded-For entry — caller-supplied.
+      The scope fallback below is therefore reached only when the header is
+      absent entirely (local runs, tests), never on the deployed path.
     """
     headers = dict(scope.get("headers") or [])
     fwd = headers.get(b"x-forwarded-for")
     if fwd:
-        last = fwd.decode("latin-1").split(",")[-1].strip()
-        if last:
-            return last
+        chain = [entry.strip() for entry in fwd.decode("latin-1").split(",")]
+        chain = [entry for entry in chain if entry]
+        if chain:
+            skip = _trusted_hops() if hops is None else max(0, hops)
+            index = len(chain) - 1 - skip
+            return chain[index] if index >= 0 else CHAIN_TOO_SHORT_KEY
     client = scope.get("client")
     return client[0] if client else "unknown"
 
