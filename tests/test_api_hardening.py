@@ -104,6 +104,33 @@ def test_readiness_reports_configured_signer_and_pdax(client, monkeypatch):
     assert body["pdax"] == "configured"
 
 
+def test_attestation_path_rejects_out_of_bounds_job_id(client):
+    """The job_id path param is bounded at the router edge, so oversized or
+    non-hex ids are a 422 — no RPC round-trip, no stack trace."""
+    for job_id in (
+        "ab" * 512,  # far past 16 bytes
+        "abc",  # too short
+        "zz" * 16,  # right length, not hex
+        "../../etc/passwd",
+    ):
+        r = client.get(f"/api/stellar/attestation/{job_id}")
+        assert r.status_code in (404, 422), (job_id, r.status_code)
+
+
+def test_attestation_path_accepts_a_well_formed_job_id(client, monkeypatch):
+    """The bound rejects garbage without rejecting real ids: a valid one gets
+    past validation and reaches the (here stubbed-offline) RPC layer."""
+    from app.stellar import client as sc
+
+    def _offline(*_args, **_kwargs):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "simulate_read", _offline)
+    r = client.get(f"/api/stellar/attestation/{'ab' * 16}")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "attestation_read_failed"
+
+
 def test_charge_rejects_negative_amount(client):
     r = client.post(
         "/api/stellar/server/charge",

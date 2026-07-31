@@ -131,6 +131,11 @@ async def network() -> NetworkInfo:
 # garbage at the router edge instead of paying an RPC round-trip to find out.
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
 
+# Job/auth ids are 16-byte BytesN rendered hex — exactly 32 hex chars. Same
+# reasoning as AGENT_ID_PATTERN: bound the path param at the router edge so a
+# malformed id is a 422 with no RPC round-trip and no stack trace.
+JOB_ID_HEX_PATTERN = r"^[0-9a-fA-F]{32}$"
+
 
 # ── reads ───────────────────────────────────────────────────────
 @router.get("/agent/{agent_id}", response_model=AgentRead)
@@ -204,12 +209,12 @@ async def read_reputation(
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
-async def read_attestation(job_id_hex: str) -> AttestationRead:
+async def read_attestation(job_id_hex: str = Path(..., pattern=JOB_ID_HEX_PATTERN)) -> AttestationRead:
     """Read an on-chain Attestation by hex-encoded 16-byte job_id."""
     try:
+        # The path pattern already guarantees 32 hex chars, so this decode
+        # cannot fail and always yields exactly 16 bytes.
         jid = bytes.fromhex(job_id_hex)
-        if len(jid) != 16:
-            raise ValueError("job_id must be 32 hex chars (16 bytes)")
 
         async def _fetch() -> Any:
             return await asyncio.to_thread(
@@ -222,7 +227,10 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
         result = await rcache.get_or_set(f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch)
         return AttestationRead(attestation=result)
     except Exception as e:
-        logger.exception("attestation read failed for %s", job_id_hex)
+        # Same reasoning as read_agent: an unsealed job id is a routine miss,
+        # not a stack-trace event — full tracebacks here bury the real errors.
+        # The RPC layer logs the underlying failure with its own timing.
+        logger.warning("attestation read failed for %s: %s", job_id_hex, e)
         raise HTTPException(400, "attestation_read_failed") from e
 
 
