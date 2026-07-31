@@ -305,8 +305,104 @@ def test_unset_signing_key_is_quiet(caplog):
     assert _errors(caplog) == []
 
 
+# ── STELLAR_ADMIN_ADDRESS missing ───────────────────────────────
+# Every contract read needs a source account; app/stellar/client.py raises
+# "no source address" without one. /readiness already reports this as
+# not_ready — the startup report must agree with it, not contradict it.
+
+# render.yaml's live mainnet values: public ids, and the shape the deployed
+# service actually boots with.
+_PRODUCTION_CONTRACTS = {
+    "stellar_agent_registry": "CBTJ3BXTMTA2PQLRTSAZHEWQRTBMNHYCOKY5WOIYAH36LT4HTN63LTD4",
+    "stellar_reputation_ledger": "CDFWQJY72GPH7PEQVFGBDZESZNVRF6LQLVWU42CFMWPGRME5RWN5AXSX",
+    "stellar_payment_escrow": "CBJCQBA47Q3EQ7HC46GAWJPVM7KMD5KAEI5KG4FPYJFKR3NYB4QR5CNF",
+    "stellar_attestation_registry": "CBLV6QGFCMXBXHT62JZ7YH22NXW7MVBGV6TGOGX3OHY46GQGPYCTAAK4",
+    "stellar_asset_sac": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+}
+_PRODUCTION_ADMIN = "GA7AI5TAJEZA27I666DSJC4MUJYBEWUYNNZWPU7R2ONA7IZQVO6R5OQV"
+
+
+def test_missing_admin_address_with_contract_ids_is_reported_and_still_boots(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _settings(**_PRODUCTION_CONTRACTS, stellar_admin_address="")
+    assert s.stellar_admin_address == ""  # boots — never fatal
+    reported = _errors(caplog)
+    assert any("STELLAR_ADMIN_ADDRESS" in m for m in reported)
+    # Actionable means naming which ids are live, not just that some are.
+    assert any("STELLAR_PAYMENT_ESCROW" in m for m in reported)
+
+
+def test_admin_address_set_is_quiet(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(**_PRODUCTION_CONTRACTS, stellar_admin_address=_PRODUCTION_ADMIN)
+    assert _errors(caplog) == []
+
+
+def test_missing_admin_address_without_contract_ids_is_quiet(caplog):
+    # No ids configured → nothing to read, and /readiness already calls the
+    # deployment incomplete on the ids alone. Staying silent keeps the demo
+    # and local dev boot clean.
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(stellar_admin_address="")
+    assert _errors(caplog) == []
+
+
+def test_missing_admin_address_agrees_with_the_readiness_probe(client, monkeypatch):
+    # The startup report must not contradict /readiness (app/main.py): the
+    # config it stays quiet about is exactly the config that answers ready.
+    from app.config import settings as live
+
+    for name, value in _PRODUCTION_CONTRACTS.items():
+        monkeypatch.setattr(live, name, value)
+    monkeypatch.setattr(live, "stellar_admin_address", _PRODUCTION_ADMIN)
+    assert client.get("/readiness").status_code == 200
+
+    monkeypatch.setattr(live, "stellar_admin_address", "")
+    response = client.get("/readiness")
+    assert response.status_code == 503
+    assert response.json()["stellar"] == "incomplete"
+
+
+# ── The live deployment must always boot ────────────────────────
+# render.yaml sets autoDeploy, so a validator that rejects (or now, one that
+# flags) the real mainnet config takes the product down on merge.
+
+
 def test_demo_defaults_report_nothing(caplog):
     with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
         s = _settings()
     assert _errors(caplog) == []
     assert s.pdax_environment == "uat"
+
+
+def _production_shaped(**overrides) -> Settings:
+    return _settings(
+        **_MAINNET,
+        **_PRODUCTION_CONTRACTS,
+        stellar_rpc_url="https://mainnet.sorobanrpc.com",
+        stellar_admin_address=_PRODUCTION_ADMIN,
+        stellar_signing_key=_REAL_SIGNER.secret,
+        api_key="live-key",
+        openai_api_key="sk-live",
+        pdax_username="ops@example.com",
+        pdax_password="pw",
+        pdax_otp_secret=_VALID_OTP_SECRET,
+        pdax_webhook_secret="whsec",
+        **overrides,
+    )
+
+
+def test_production_shaped_config_boots_clean_and_silent(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _production_shaped(pdax_environment="stage")  # render.yaml's value
+    assert s.stellar_network == "mainnet"
+    assert s.stellar_signing_key == _REAL_SIGNER.secret
+    assert _errors(caplog) == []
+
+
+def test_production_pdax_shaped_config_boots_clean_and_silent(caplog):
+    # The same service once PDAX is flipped to production.
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _production_shaped(pdax_environment="production")
+    assert s.pdax_environment == "production"
+    assert _errors(caplog) == []

@@ -332,6 +332,47 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _report_contract_reads_without_a_source_address(self) -> "Settings":
+        """Name a missing STELLAR_ADMIN_ADDRESS at startup, not per request.
+
+        Every simulate_read needs a source account, and app/stellar/client.py
+        raises RuntimeError("no source address; set STELLAR_ADMIN_ADDRESS")
+        without one — so a deploy that has contract ids but no admin address
+        has 100% of its contract reads failing, with the cause named only in a
+        stack trace three layers down.
+
+        Logged rather than raised: nothing is exposed by the omission (reads
+        fail closed), and /readiness (app/main.py) already reports this exact
+        condition as not_ready — this makes the startup story agree with that
+        signal instead of duplicating or contradicting it. The report is
+        conditioned on at least one contract id being configured, so it stays
+        silent for the demo/local defaults, which have neither and which
+        /readiness already calls incomplete on the contract ids alone.
+        """
+        if self.stellar_admin_address.strip():
+            return self
+        configured = [
+            name
+            for name, value in (
+                ("STELLAR_AGENT_REGISTRY", self.stellar_agent_registry),
+                ("STELLAR_REPUTATION_LEDGER", self.stellar_reputation_ledger),
+                ("STELLAR_PAYMENT_ESCROW", self.stellar_payment_escrow),
+                ("STELLAR_ATTESTATION_REGISTRY", self.stellar_attestation_registry),
+                ("STELLAR_ASSET_SAC", self.stellar_asset_sac),
+            )
+            if value.strip()
+        ]
+        if configured:
+            logger.error(
+                "STELLAR_ADMIN_ADDRESS is not set, but contract ids are configured (%s). Contract "
+                "reads have no source account, so every on-chain read will fail with "
+                "'no source address; set STELLAR_ADMIN_ADDRESS' and /readiness will answer 503 "
+                "not_ready. Set STELLAR_ADMIN_ADDRESS to the G… address that funds simulation.",
+                ", ".join(configured),
+            )
+        return self
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
