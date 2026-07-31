@@ -16,6 +16,10 @@ from ..trace_bus import bus
 
 logger = logging.getLogger(__name__)
 
+# Per-step ceiling — gpt-5.3-codex producing a 600–1000 line artifact can
+# legitimately take 30–90s. Enough headroom, still bounded.
+STEP_TIMEOUT_SECONDS = 120.0
+
 # Strong references to in-flight background runs — asyncio.create_task alone
 # only keeps a weak reference, so an un-referenced task can be garbage
 # collected mid-run. Tasks remove themselves on completion.
@@ -154,6 +158,10 @@ async def _run(
         for step in plan.plan.steps:
             worker = get_worker(step.agent_id)
             if worker is None:
+                # Trace lines only reach the SSE viewer and are dropped with the
+                # task; every step failure also goes to the server log so an
+                # outage is diagnosable after the fact.
+                logger.error("task %s step %s: unknown agent — step skipped", task_id, step.agent_id)
                 await _emit(task_id, start, "error", f"unknown agent: {step.agent_id}")
                 continue
 
@@ -165,16 +173,32 @@ async def _run(
             )
 
             try:
-                # 120s ceiling — gpt-5.3-codex producing a 600–1000 line artifact
-                # can legitimately take 30–90s. Enough headroom, still bounded.
                 output = await asyncio.wait_for(
                     worker.run(plan.intent, step.rationale, context=context),
-                    timeout=120.0,
+                    timeout=STEP_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                logger.error(
+                    "task %s step %s (%s): timed out after %.0fs",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    STEP_TIMEOUT_SECONDS,
+                )
                 await _emit(task_id, start, "error", f"{worker.name} timed out")
                 continue
-            except Exception as e:  # pragma: no cover
+            except Exception as e:
+                # exc_info: a revoked key / exhausted quota surfaces as a
+                # provider exception several frames down — the traceback is the
+                # only way to tell those apart without a debugger.
+                logger.error(
+                    "task %s step %s (%s): failed: %s",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    e,
+                    exc_info=True,
+                )
                 await _emit(task_id, start, "error", f"{worker.name} failed: {e}")
                 continue
 
