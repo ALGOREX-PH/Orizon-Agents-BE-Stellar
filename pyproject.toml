@@ -20,9 +20,10 @@ source = ["app"]
 omit = ["app/demo_kits/kits/*"]
 
 [tool.coverage.report]
-# Current coverage is 78% — the floor catches regressions without blocking
-# work on the hard-to-test signing paths. Ratchet upward as they get covered.
-fail_under = 75
+# Coverage reached 85.6% once the failure paths (step errors, settlement,
+# ramp logging, proxy trust) got tests. Floor ratcheted to keep that, with
+# headroom for the still-thin signing paths in app/stellar/client.py.
+fail_under = 82
 skip_covered = true
 show_missing = true
 
