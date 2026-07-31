@@ -7,6 +7,7 @@ import secrets
 from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
+from ..agents.workers.prompt_safety import fence_user_input
 from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
 from ..schemas import DecomposeResponse, Plan, PlanStep, StoredPlan
@@ -72,6 +73,16 @@ def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
         rep_display = info.smoothed_bps / 2000 if info is not None else a.rep
         lines.append(f"- id={a.id} name={a.name} price={a.price:.3f} rep={rep_display:.2f} skills={','.join(a.skills)}")
     return "\n".join(lines)
+
+
+def build_planning_prompt(registry_block: str, intent: str) -> str:
+    """Registry facts, then the FENCED intent, then the ask.
+
+    The intent is free-form and attacker-controllable, so it is never spliced
+    bare next to AVAILABLE_AGENTS — it arrives as a delimited data block the
+    planner is told not to obey. The trusted instruction goes last.
+    """
+    return "\n\n".join([registry_block, fence_user_input(intent), "Return the Plan."])
 
 
 async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_svc.RepInfo]) -> DecomposeResponse:
@@ -140,11 +151,7 @@ async def decompose(intent: str) -> DecomposeResponse:
         return await _build_kit_plan(intent, kit, reps)
 
     # ── Free-form path: LLM orchestrator decides the plan ──────────────────
-    prompt = f"""{_registry_prompt_fragment(reps)}
-
-USER_INTENT: {intent}
-
-Return the Plan."""
+    prompt = build_planning_prompt(_registry_prompt_fragment(reps), intent)
     # Hard end-to-end budget for the planning call — without it a hung
     # upstream would pin this request for the OpenAI client's full
     # timeout x retry envelope. The router maps TimeoutError to a 504.

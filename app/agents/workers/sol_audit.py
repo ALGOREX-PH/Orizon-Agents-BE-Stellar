@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ...config import settings
 from ..model_factory import build_openai_chat
 from .base import Worker
+from .prompt_safety import worker_prompt
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
 
@@ -48,7 +49,7 @@ class SolAudit(Worker):
         rationale: str,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the audit summary."
+        prompt = worker_prompt(intent, rationale, "Return the audit summary.")
         result = await self._agent.arun(prompt)
         out: AuditOutput = result.content  # type: ignore[assignment]
         return {

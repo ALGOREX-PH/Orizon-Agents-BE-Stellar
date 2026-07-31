@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from ...config import settings
 from ..model_factory import build_openai_chat
 from .base import Worker
+from .prompt_safety import worker_prompt
 
 
 class _TokensOutput(BaseModel):
@@ -90,7 +91,7 @@ class DesignTokens(Worker):
             )
 
         # ── Free-form path: LLM-generated tokens ───────────────────────────
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the design tokens."
+        prompt = worker_prompt(intent, rationale, "Return the design tokens.")
         result = await self._agent.arun(prompt)
         out: _TokensOutput = result.content  # type: ignore[assignment]
         palette = {
