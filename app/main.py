@@ -199,9 +199,13 @@ app.add_middleware(
     allow_origin_regex=_CORS_ORIGIN_REGEX.pattern,
     # The API is token/header-based — no cookies — so credentials stay off,
     # and only the methods/headers the frontend actually sends are allowed.
+    # x-task-token is the per-task read capability (lib/api.ts): today the
+    # frontend proxies same-origin so no preflight happens, but the instant
+    # anything calls this API cross-origin with task auth on, its absence
+    # here is a hard preflight failure.
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["content-type", "authorization", "x-api-key"],
+    allow_headers=["content-type", "authorization", "x-api-key", "x-task-token"],
 )
 
 # Added last → runs outermost, so artifact/trace payloads (30–76 kB) leave the

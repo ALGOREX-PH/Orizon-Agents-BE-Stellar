@@ -224,6 +224,39 @@ def test_cors_allows_project_preview_origins(client):
         assert r.headers["access-control-allow-origin"] == origin
 
 
+def test_cors_preflight_allows_task_token_header(client):
+    """The frontend sends X-Task-Token for per-task reads; a cross-origin
+    caller must get it back from the preflight or the request never fires."""
+    origin = "https://orizon-agents-fe-stellar.vercel.app"
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-task-token",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == origin
+    allowed = {h.strip().lower() for h in r.headers["access-control-allow-headers"].split(",")}
+    assert "x-task-token" in allowed
+    # The headers already relied on stay allowed.
+    assert {"content-type", "authorization", "x-api-key"} <= allowed
+
+
+def test_cors_preflight_rejects_unknown_header(client):
+    """Guard against the allow-list quietly becoming a wildcard."""
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": "https://orizon-agents-fe-stellar.vercel.app",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-not-a-real-header",
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_cors_rejects_foreign_vercel_origins(client):
     for origin in (
         "https://evil.vercel.app",
