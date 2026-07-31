@@ -1,3 +1,5 @@
+import base64
+import binascii
 import logging
 
 from pydantic import model_validator
@@ -251,6 +253,39 @@ class Settings(BaseSettings):
                 "webhook-signature requirement will not be enforced. Fix PDAX_ENVIRONMENT.",
                 self.pdax_environment,
                 ", ".join(PDAX_ENVIRONMENTS),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _report_malformed_pdax_otp_secret(self) -> "Settings":
+        """Name a mistyped PDAX_OTP_SECRET at startup, not at the MFA challenge.
+
+        totp_now() (app/pdax/totp.py) base32-decodes the seed the first time
+        PDAX answers a SOFTWARE_TOKEN_MFA challenge; a mistyped seed fails
+        there, one login attempt deep into a code path that only runs when MFA
+        is switched on upstream. The decode below mirrors that function's
+        normalisation and padding exactly, so agreement is not a coincidence.
+
+        Logged rather than raised: a bad seed only breaks this deployment's own
+        PDAX login (it fails closed — no session, no orders), and the value is
+        optional and unset in most deployments, so it can never justify
+        refusing to boot the live service.
+        """
+        secret = self.pdax_otp_secret.strip().replace(" ", "").upper()
+        if not secret:
+            return self
+        remainder = len(secret) % 8
+        padded = secret + ("=" * (8 - remainder)) if remainder else secret
+        try:
+            base64.b32decode(padded)
+        except (binascii.Error, ValueError):
+            # The seed itself is a credential: name the variable, never echo
+            # the value or the decoder's message (which quotes the input).
+            logger.error(
+                "PDAX_OTP_SECRET is not valid base32. Every PDAX login that hits a "
+                "SOFTWARE_TOKEN_MFA challenge will fail to answer it, so no PDAX call can "
+                "authenticate. Re-copy the TOTP seed from the PDAX console, or unset "
+                "PDAX_OTP_SECRET if the account has no MFA."
             )
         return self
 

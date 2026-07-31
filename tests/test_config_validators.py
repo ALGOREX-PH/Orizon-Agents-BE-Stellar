@@ -197,6 +197,51 @@ def test_empty_pdax_environment_is_quiet(caplog):
     assert _errors(caplog) == []
 
 
+# ── PDAX_OTP_SECRET malformed ───────────────────────────────────
+# app/pdax/totp.py base32-decodes the seed at the first MFA challenge.
+# Reported at startup; never fatal, and the seed itself is never echoed.
+
+_VALID_OTP_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+def test_malformed_otp_secret_is_reported_and_still_boots(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _settings(pdax_otp_secret="not-base32!!")
+    assert s.pdax_otp_secret == "not-base32!!"  # boots — never fatal
+    assert any("PDAX_OTP_SECRET" in m for m in _errors(caplog))
+
+
+def test_malformed_otp_secret_report_never_echoes_the_seed(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(pdax_otp_secret="not-base32!!")
+    assert _errors(caplog)
+    assert all("not-base32" not in m for m in _errors(caplog))
+
+
+def test_valid_otp_secret_is_quiet(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(pdax_otp_secret=_VALID_OTP_SECRET)
+    assert _errors(caplog) == []
+
+
+def test_otp_secret_padding_matches_the_totp_module(caplog):
+    # An unpadded, lowercased, space-separated seed is what a console copy
+    # looks like; totp.py accepts it, so the startup report must too.
+    from app.pdax.totp import totp_now
+
+    unpadded = "jbsw y3dp ehpk 3pxp"
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(pdax_otp_secret=unpadded)
+    assert _errors(caplog) == []
+    assert totp_now(unpadded, timestamp=0) == totp_now(_VALID_OTP_SECRET, timestamp=0)
+
+
+def test_unset_otp_secret_is_quiet(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(pdax_otp_secret="")
+    assert _errors(caplog) == []
+
+
 def test_demo_defaults_report_nothing(caplog):
     with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
         s = _settings()
