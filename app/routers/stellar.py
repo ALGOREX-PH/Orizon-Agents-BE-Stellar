@@ -301,10 +301,14 @@ class SubmitReq(BaseModel):
 @router.post("/submit")
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
+    # Identify the transaction WITHOUT logging the envelope: signed XDR is
+    # signature material, so only the derived hash and source account — both
+    # public, both greppable against the explorer — go into the record.
+    tx_hash, source = sc.envelope_identity(req.signed_xdr)
     try:
         result = await sc.submit_signed_xdr_async(req.signed_xdr)
     except Exception as e:
-        logger.exception("signed xdr submit failed")
+        logger.exception("signed xdr submit failed · tx_hash=%s source=%s", tx_hash, source)
         raise HTTPException(400, "submit_failed") from e
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
@@ -344,7 +348,15 @@ async def server_charge(req: ChargeReq) -> dict:
             args,
         )
     except Exception as e:
-        logger.exception("server charge failed")
+        # A money-path stack trace has to be tie-able to the on-chain
+        # transaction it belongs to, or it is unusable during an incident.
+        # Ids and amount only — never the signing key or its derived secret.
+        logger.exception(
+            "server charge failed · auth_id=%s job_id=%s amount_usdc=%s",
+            req.auth_id_hex,
+            req.job_id_hex,
+            req.amount_usdc,
+        )
         raise HTTPException(400, "charge_failed") from e
 
 
@@ -393,7 +405,16 @@ async def server_seal(req: SealReq) -> dict:
             args,
         )
     except Exception as e:
-        logger.exception("server seal failed")
+        # Same rule as charge: enough to find the attestation on-chain
+        # (job id, the orchestrator paying for it, the sealed total), nothing
+        # that could reconstruct a key.
+        logger.exception(
+            "server seal failed · job_id=%s orchestrator=%s agents=%d total_spent_usdc=%s",
+            req.job_id_hex,
+            req.orchestrator,
+            len(req.agents),
+            req.total_spent_usdc,
+        )
         raise HTTPException(400, "seal_failed") from e
 
 

@@ -161,6 +161,114 @@ def test_envelope_identity_never_leaks_the_xdr():
     assert sc.envelope_identity("not-xdr") == ("unparseable", "unknown")
 
 
+# ── money-path failure context ─────────────────────────────────────────
+# A stack trace from /server/charge, /server/seal or /submit has to name the
+# transaction it belongs to, and must never carry key material.
+ROUTER_LOGGER = "app.routers.stellar"
+
+CHARGE_BODY = {"auth_id_hex": "ab" * 16, "amount_usdc": 1.0, "job_id_hex": "cd" * 16}
+SEAL_BODY = {
+    "job_id_hex": "cd" * 16,
+    "orchestrator": "G" + "A" * 55,
+    "intent_hash_hex": "ef" * 32,
+    "agents": ["agt_01h8", "agt_02k2"],
+    "receipts_hex": ["11" * 16],
+    "total_spent_usdc": 2.5,
+}
+
+
+@pytest.fixture()
+def server_signing_key(hermetic_settings):
+    """Give the backend a throwaway signing key for one test, clearing the
+    lru_cached keypair on both sides so it never leaks into another test."""
+    from stellar_sdk import Keypair
+
+    kp = Keypair.random()
+    sc._signer_keypair.cache_clear()
+    hermetic_settings.stellar_signing_key = kp.secret
+    hermetic_settings.max_charge_usdc = 100.0
+    yield kp
+    sc._signer_keypair.cache_clear()
+
+
+@pytest.fixture()
+def failing_invoke(monkeypatch):
+    """Make the backend-signed invoke blow up without touching the network."""
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("escrow: authorization expired")
+
+    monkeypatch.setattr(sc, "invoke_with_server_key_async", _boom)
+
+
+def _router_errors(caplog) -> str:
+    return "\n".join(rec.getMessage() for rec in caplog.records if rec.name == ROUTER_LOGGER)
+
+
+def test_charge_failure_log_carries_transaction_ids(client, server_signing_key, failing_invoke, caplog):
+    with caplog.at_level(logging.ERROR, logger=ROUTER_LOGGER):
+        r = client.post("/api/stellar/server/charge", json=CHARGE_BODY)
+    assert r.status_code == 400
+
+    line = _router_errors(caplog)
+    assert "server charge failed" in line
+    assert f"auth_id={CHARGE_BODY['auth_id_hex']}" in line
+    assert f"job_id={CHARGE_BODY['job_id_hex']}" in line
+    assert "amount_usdc=1.0" in line
+    # caplog.text includes the formatted traceback, so this covers the whole
+    # record, not just the message.
+    assert server_signing_key.secret not in caplog.text
+
+
+def test_seal_failure_log_carries_transaction_ids(client, server_signing_key, failing_invoke, caplog):
+    with caplog.at_level(logging.ERROR, logger=ROUTER_LOGGER):
+        r = client.post("/api/stellar/server/seal", json=SEAL_BODY)
+    assert r.status_code == 400
+
+    line = _router_errors(caplog)
+    assert "server seal failed" in line
+    assert f"job_id={SEAL_BODY['job_id_hex']}" in line
+    assert f"orchestrator={SEAL_BODY['orchestrator']}" in line
+    assert "total_spent_usdc=2.5" in line
+    assert server_signing_key.secret not in caplog.text
+
+
+def test_submit_failure_log_identifies_tx_without_leaking_the_xdr(client, monkeypatch, caplog):
+    from stellar_sdk import Account, Keypair, Network, TransactionBuilder
+
+    kp = Keypair.random()
+    tx = (
+        TransactionBuilder(
+            source_account=Account(kp.public_key, 1),
+            network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
+            base_fee=100,
+        )
+        .append_bump_sequence_op(2)
+        .set_timeout(30)
+        .build()
+    )
+    tx.sign(kp)
+    signed_xdr = tx.to_xdr()
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "submit_signed_xdr_async", _boom)
+
+    with caplog.at_level(logging.ERROR, logger=ROUTER_LOGGER):
+        r = client.post("/api/stellar/submit", json={"signed_xdr": signed_xdr})
+    assert r.status_code == 400
+
+    line = _router_errors(caplog)
+    assert "signed xdr submit failed" in line
+    assert f"source={kp.public_key}" in line
+    tx_hash = line.split("tx_hash=")[1].split()[0]
+    assert len(tx_hash) == 64 and tx_hash != "unparseable"
+    # The envelope carries the user's signature — it must stay out of the log.
+    assert signed_xdr not in caplog.text
+    assert kp.secret not in caplog.text
+
+
 def test_diagnostic_decode_failures_are_reported_not_swallowed():
     """`except Exception: continue` used to drop these silently; the count is
     now folded into the summary the caller logs and returns."""
