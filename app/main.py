@@ -373,7 +373,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         settings.stellar_attestation_registry,
         settings.stellar_asset_sac,
     )
-    stellar_ok = bool(settings.stellar_rpc_url) and all(contract_ids)
+    # The admin address is as load-bearing as the contract ids: every
+    # simulate_read needs a source account and raises outright without one
+    # (app/stellar/client.py), so a deploy missing STELLAR_ADMIN_ADDRESS has
+    # 100% of its contract reads failing — it must not report "ready".
+    stellar_ok = bool(settings.stellar_rpc_url) and bool(settings.stellar_admin_address) and all(contract_ids)
     # The reputation ledger only matters while reputation-gated routing is on.
     if settings.reputation_enabled and not settings.stellar_reputation_ledger:
         stellar_ok = False

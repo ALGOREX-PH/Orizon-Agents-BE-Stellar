@@ -36,6 +36,9 @@ _CONTRACT_ID_FIELDS = (
 def _configure_stellar(monkeypatch) -> None:
     for field in _CONTRACT_ID_FIELDS:
         monkeypatch.setattr(settings, field, "C" + "A" * 55)
+    # Reads need a source account as much as they need contract ids, so a
+    # fully-configured Stellar setup includes the admin address.
+    monkeypatch.setattr(settings, "stellar_admin_address", VALID_G)
 
 
 def test_readiness_ready_without_signing_key(client, monkeypatch):
@@ -70,6 +73,19 @@ def test_readiness_503_when_stellar_incomplete(client, monkeypatch):
     _configure_stellar(monkeypatch)
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
     monkeypatch.setattr(settings, "stellar_agent_registry", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["stellar"] == "incomplete"
+
+
+def test_readiness_503_when_admin_address_missing(client, monkeypatch):
+    """Without STELLAR_ADMIN_ADDRESS every simulate_read raises outright
+    ("no source address"), so the probe must not report a healthy Stellar."""
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_admin_address", "")
     r = client.get("/readiness")
     assert r.status_code == 503
     body = r.json()
