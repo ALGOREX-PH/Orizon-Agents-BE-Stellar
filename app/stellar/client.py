@@ -19,6 +19,8 @@ import asyncio
 import logging
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -69,6 +71,110 @@ def network_passphrase() -> str:
 def explorer_network() -> str:
     """stellar.expert network segment for the configured network."""
     return "public" if settings.stellar_network in ("mainnet", "public") else settings.stellar_network
+
+
+# ── observability ───────────────────────────────────────────────────────
+# Every Soroban round-trip is timed and emitted in the same shape as
+# `app/pdax/observability.py` — operation, target, latency, outcome — so a
+# "the app is slow" report resolves to a specific call instead of a shrug.
+#
+# LEVEL POLICY (deliberately asymmetric between the traffic classes):
+#
+#   reads    A dashboard metrics poll fans out up to twelve `simulate_read`
+#            calls at once, each of which is TWO sequential RPC hops, so an
+#            INFO line per success would bury every other record. Successes
+#            therefore log at DEBUG (off in production, one env var away when
+#            you need them) and are already aggregated: one line per read
+#            carrying both hops' timings, not one per hop.
+#            A read over SLOW_READ_MS logs at WARNING — that is the signal
+#            that the rate-limited SDF public RPC (see render.yaml) is
+#            throttling us, and it is the precursor to the bounded 8-thread
+#            executor in app/main.py saturating and stalling unrelated
+#            routes. Rare by construction, so a line each is affordable.
+#            Failures log at ERROR: every one of them is a 4xx/5xx a user saw.
+#
+#   submits  Rare, on the money path, and each one moves value on-chain, so
+#            successes are worth an INFO line (`notable=True`). Slow/failed
+#            submits follow the same WARNING/ERROR rule against the larger
+#            SLOW_SUBMIT_MS budget.
+#
+#   polls    Duration is dominated by ledger close time (~5s), not by RPC
+#            health, so they get their own much larger threshold: warning at
+#            SLOW_POLL_MS means "this transaction is taking abnormally long
+#            to confirm", not "the RPC is slow".
+#
+# Module-level constants, not settings: these are diagnostic thresholds tuned
+# to the timeout profiles in `_server()`, not per-deployment knobs.
+SLOW_READ_MS = 1_500.0
+SLOW_SUBMIT_MS = 5_000.0
+SLOW_POLL_MS = 20_000.0
+
+
+def _ms_since(started: float) -> float:
+    return (time.monotonic() - started) * 1000.0
+
+
+def _short(value: str) -> str:
+    """Abbreviate a 56-char Stellar id/address to something greppable."""
+    return f"{value[:6]}…{value[-4:]}" if len(value) > 14 else value
+
+
+def _contract_label(contract_id: str) -> str:
+    """Friendly name for one of our four contracts; abbreviated id otherwise."""
+    try:
+        ids = contract_ids()
+    except Exception:  # config not loaded (shouldn't happen) — don't break logging
+        return _short(contract_id)
+    for name, value in vars(ids).items():
+        if value == contract_id:
+            return name
+    return _short(contract_id)
+
+
+def _log_rpc(
+    op: str,
+    target: str,
+    latency_ms: float,
+    span: dict[str, Any],
+    *,
+    slow_ms: float,
+    notable: bool = False,
+    error: str | None = None,
+) -> None:
+    """Emit exactly one structured line for a Soroban RPC interaction."""
+    detail = " ".join(f"{k}={v}" for k, v in span.items())
+    tail = f" · {detail}" if detail else ""
+    if error is not None:
+        logger.error("[stellar.rpc] %s %s failed in %.0fms%s: %s", op, target, latency_ms, tail, error)
+    elif latency_ms >= slow_ms:
+        logger.warning("[stellar.rpc] %s %s slow: %.0fms%s", op, target, latency_ms, tail)
+    else:
+        logger.log(
+            logging.INFO if notable else logging.DEBUG,
+            "[stellar.rpc] %s %s ok in %.0fms%s",
+            op,
+            target,
+            latency_ms,
+            tail,
+        )
+
+
+@contextmanager
+def _rpc_span(op: str, target: str, *, slow_ms: float, notable: bool = False) -> Iterator[dict[str, Any]]:
+    """Time one RPC interaction and log its outcome, exactly once, either way.
+
+    Yields a mutable dict the body annotates (`stage=`, `tx=`, per-hop
+    timings); its items are appended to the line as `k=v` pairs, so a failure
+    says how far the call got before it died.
+    """
+    span: dict[str, Any] = {}
+    started = time.monotonic()
+    try:
+        yield span
+    except Exception as e:
+        _log_rpc(op, target, _ms_since(started), span, slow_ms=slow_ms, error=f"{type(e).__name__}: {e}")
+        raise
+    _log_rpc(op, target, _ms_since(started), span, slow_ms=slow_ms, notable=notable)
 
 
 _thread_local = threading.local()
@@ -124,24 +230,38 @@ def simulate_read(
     if not src_addr:
         raise RuntimeError("no source address; set STELLAR_ADMIN_ADDRESS")
 
-    account = server.load_account(src_addr)
-    tx = (
-        TransactionBuilder(
-            source_account=account,
-            network_passphrase=network_passphrase(),
-            base_fee=100,
+    # One span for the whole read, annotated with the per-hop split: this call
+    # is two sequential blocking round-trips, and when it goes slow the split
+    # is what says whether the RPC is throttling us on load_account or on
+    # simulate_transaction.
+    with _rpc_span("read", f"{_contract_label(contract_id)}.{function_name}", slow_ms=SLOW_READ_MS) as span:
+        span["src"] = _short(src_addr)
+        span["stage"] = "load_account"
+        hop = time.monotonic()
+        account = server.load_account(src_addr)
+        span["load_ms"] = f"{_ms_since(hop):.0f}"
+
+        tx = (
+            TransactionBuilder(
+                source_account=account,
+                network_passphrase=network_passphrase(),
+                base_fee=100,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=contract_id,
+                function_name=function_name,
+                parameters=args or [],
+            )
+            .set_timeout(30)
+            .build()
         )
-        .append_invoke_contract_function_op(
-            contract_id=contract_id,
-            function_name=function_name,
-            parameters=args or [],
-        )
-        .set_timeout(30)
-        .build()
-    )
-    sim = server.simulate_transaction(tx)
-    if sim.error:
-        raise RuntimeError(f"simulate failed: {sim.error}")
+        span["stage"] = "simulate"
+        hop = time.monotonic()
+        sim = server.simulate_transaction(tx)
+        span["sim_ms"] = f"{_ms_since(hop):.0f}"
+        if sim.error:
+            raise RuntimeError(f"simulate failed: {sim.error}")
+        span["stage"] = "ok"
     # Latest successful result is in `results[0].xdr` (base64). For convenience,
     # decode with scval helpers at the call site.
     if not sim.results:
@@ -214,31 +334,40 @@ def _send_server_signed(
     """Build, prepare, sign (backend key) and send; returns the pending tx hash."""
     kp = _signer_keypair()
     server = _server(submit=True)
-    account = server.load_account(kp.public_key)
+    label = f"{_contract_label(contract_id)}.{function_name}"
 
-    tx = (
-        TransactionBuilder(
-            source_account=account,
-            network_passphrase=network_passphrase(),
-            base_fee=100,
-        )
-        .append_invoke_contract_function_op(
-            contract_id=contract_id,
-            function_name=function_name,
-            parameters=args,
-        )
-        .set_timeout(30)
-        .build()
-    )
-    try:
-        tx = server.prepare_transaction(tx)
-    except PrepareTransactionException as e:
-        raise RuntimeError(f"prepare failed: {e.simulate_transaction_response.error}") from e
-    tx.sign(kp)
+    with _rpc_span("submit", label, slow_ms=SLOW_SUBMIT_MS, notable=True) as span:
+        span["signer"] = _short(kp.public_key)
+        span["stage"] = "load_account"
+        account = server.load_account(kp.public_key)
 
-    sent = server.send_transaction(tx)
-    if sent.status != SendTransactionStatus.PENDING:
-        raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
+        tx = (
+            TransactionBuilder(
+                source_account=account,
+                network_passphrase=network_passphrase(),
+                base_fee=100,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=contract_id,
+                function_name=function_name,
+                parameters=args,
+            )
+            .set_timeout(30)
+            .build()
+        )
+        span["stage"] = "prepare"
+        try:
+            tx = server.prepare_transaction(tx)
+        except PrepareTransactionException as e:
+            raise RuntimeError(f"prepare failed: {e.simulate_transaction_response.error}") from e
+        tx.sign(kp)
+
+        span["stage"] = "send"
+        sent = server.send_transaction(tx)
+        if sent.status != SendTransactionStatus.PENDING:
+            raise RuntimeError(f"submit failed: {sent.error_result_xdr}")
+        span["stage"] = "pending"
+        span["tx"] = sent.hash
     return sent.hash
 
 
@@ -258,13 +387,32 @@ def _finalize_invoke(status: Any, tx_hash: str) -> dict[str, Any]:
     }
 
 
+def _log_poll(tx_hash: str, started: float, polls: int, outcome: str, *, timed_out: bool = False) -> None:
+    """One line per settled/abandoned transaction — see the level policy above."""
+    span = {"polls": polls, "status": outcome}
+    _log_rpc(
+        "poll",
+        _short(tx_hash),
+        _ms_since(started),
+        span,
+        slow_ms=SLOW_POLL_MS,
+        notable=True,
+        # A timeout means we submitted value on-chain and then lost track of
+        # it — the one polling outcome that always deserves an ERROR.
+        error=f"unconfirmed after {_POLL_BUDGET_SECONDS:.0f}s" if timed_out else None,
+    )
+
+
 def _poll_final_sync(tx_hash: str, finalize: Any) -> dict[str, Any]:
     """Blocking poll for final tx status (sync callers only — pins a thread)."""
-    for _ in range(int(_POLL_BUDGET_SECONDS)):
+    started = time.monotonic()
+    for polls in range(1, int(_POLL_BUDGET_SECONDS) + 1):
         status = _get_transaction(tx_hash)
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
+            _log_poll(tx_hash, started, polls, status.status.value)
             return finalize(status, tx_hash)
         time.sleep(1)
+    _log_poll(tx_hash, started, int(_POLL_BUDGET_SECONDS), "timeout", timed_out=True)
     return {"hash": tx_hash, "status": "timeout"}
 
 
@@ -275,13 +423,18 @@ async def _poll_final(tx_hash: str, finalize: Any) -> dict[str, Any]:
     polls are `await asyncio.sleep` — no thread is pinned across the ~30s
     budget.
     """
-    deadline = time.monotonic() + _POLL_BUDGET_SECONDS
+    started = time.monotonic()
+    deadline = started + _POLL_BUDGET_SECONDS
     delay = 1.0
+    polls = 0
     while True:
         status = await asyncio.to_thread(_get_transaction, tx_hash)
+        polls += 1
         if status.status in (GetTransactionStatus.SUCCESS, GetTransactionStatus.FAILED):
+            _log_poll(tx_hash, started, polls, status.status.value)
             return finalize(status, tx_hash)
         if time.monotonic() + delay > deadline:
+            _log_poll(tx_hash, started, polls, "timeout", timed_out=True)
             return {"hash": tx_hash, "status": "timeout"}
         await asyncio.sleep(delay)
         delay = min(delay * 2.0, _POLL_MAX_DELAY_SECONDS)
@@ -384,23 +537,48 @@ def build_invoke_xdr(
     `submit_signed_xdr(signed_xdr)`.
     """
     server = _server(submit=True)
-    account = server.load_account(source)
-    tx = (
-        TransactionBuilder(
-            source_account=account,
-            network_passphrase=network_passphrase(),
-            base_fee=100,
+    label = f"{_contract_label(contract_id)}.{function_name}"
+    # Two round-trips like a read, but user-initiated and one-per-click, so
+    # successes are worth an INFO line.
+    with _rpc_span("build", label, slow_ms=SLOW_SUBMIT_MS, notable=True) as span:
+        span["src"] = _short(source)
+        span["stage"] = "load_account"
+        account = server.load_account(source)
+        tx = (
+            TransactionBuilder(
+                source_account=account,
+                network_passphrase=network_passphrase(),
+                base_fee=100,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=contract_id,
+                function_name=function_name,
+                parameters=args,
+            )
+            .set_timeout(300)
+            .build()
         )
-        .append_invoke_contract_function_op(
-            contract_id=contract_id,
-            function_name=function_name,
-            parameters=args,
-        )
-        .set_timeout(300)
-        .build()
-    )
-    prepared = server.prepare_transaction(tx)
+        span["stage"] = "prepare"
+        prepared = server.prepare_transaction(tx)
+        span["stage"] = "ok"
     return prepared.to_xdr()
+
+
+def envelope_identity(signed_xdr: str) -> tuple[str, str]:
+    """Secret-free identifiers for a signed envelope: (tx_hash, source G… address).
+
+    Never raises, so it is safe to call purely to label a log line. Returns
+    only these two *derived, public* values — never any slice of the XDR
+    itself, which carries the user's signature material. Undecodable input
+    yields placeholders rather than an exception.
+    """
+    try:
+        from stellar_sdk import TransactionEnvelope
+
+        env = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase())
+        return env.hash_hex(), env.transaction.source.account_id
+    except Exception:
+        return "unparseable", "unknown"
 
 
 def _send_signed_xdr(signed_xdr: str) -> str:
@@ -414,11 +592,18 @@ def _send_signed_xdr(signed_xdr: str) -> str:
         logger.warning("[stellar.submit] bad XDR: %s", e)
         raise RuntimeError(f"bad signed XDR (likely wrong networkPassphrase or malformed): {e}") from e
 
-    sent = server.send_transaction(env)
-    if sent.status != SendTransactionStatus.PENDING:
-        detail = f"status={sent.status} error={getattr(sent, 'error_result_xdr', None)} hash={sent.hash}"
-        logger.error("[stellar.submit] send failed: %s", detail)
-        raise RuntimeError(f"submit failed ({detail})")
+    # The envelope's own hash and source account identify the transaction; the
+    # XDR itself is never logged (it carries the user's signature payload).
+    # Derived defensively — a label must never turn a good submit into a 400.
+    tx_hash, src = envelope_identity(signed_xdr)
+    with _rpc_span("submit-signed", _short(tx_hash), slow_ms=SLOW_SUBMIT_MS, notable=True) as span:
+        span["src"] = _short(src)
+        sent = server.send_transaction(env)
+        if sent.status != SendTransactionStatus.PENDING:
+            detail = f"status={sent.status} error={getattr(sent, 'error_result_xdr', None)} hash={sent.hash}"
+            logger.error("[stellar.submit] send failed: %s", detail)
+            raise RuntimeError(f"submit failed ({detail})")
+        span["stage"] = "pending"
     return sent.hash
 
 
@@ -458,6 +643,7 @@ async def submit_signed_xdr_async(signed_xdr: str) -> dict[str, Any]:
 def _extract_diagnostics(status: Any) -> str:
     """Summarize failure reasons from diagnostic events + result xdr."""
     bits: list[str] = []
+    undecodable = 0
     try:
         from stellar_sdk import xdr as _xdr
 
@@ -470,8 +656,18 @@ def _extract_diagnostics(status: Any) -> str:
                 s = " ".join(s.split())
                 if "Error(" in s or "error" in s.lower():
                     bits.append(s[:360])
-            except Exception:
+            except Exception as e:
+                # Diagnostics-of-diagnostics: one exotic event must not hide the
+                # rest, but it must not vanish either. The per-event reason goes
+                # to DEBUG (it repeats per event and is rarely actionable); the
+                # COUNT is folded into the returned summary, which the caller
+                # logs at ERROR and returns to the client — so a systematically
+                # undecodable event stream is always visible.
+                undecodable += 1
+                logger.debug("[stellar.submit] diagnostic event decode failed: %s", e)
                 continue
+        if undecodable:
+            bits.append(f"{undecodable} undecodable diagnostic event(s)")
         if not bits:
             rxdr = getattr(status, "result_xdr", None)
             if rxdr:
