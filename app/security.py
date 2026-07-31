@@ -8,7 +8,7 @@ Lightweight, dependency-free hardening primitives.
   chain, with the proxy trust boundary set by `TRUSTED_PROXY_HOPS`. Both the
   limiter and the access log key on it, so its docstring is where the
   consequences of getting that boundary wrong are written down.
-- `RateLimitMiddleware` — per-client-IP sliding-window rate limiter as a
+- `RateLimitMiddleware` — sliding-window rate limiter over that key, as a
   pure ASGI middleware (no external deps). Window/limit come from settings;
   liveness paths and CORS preflights are exempt. Rate-limited responses
   carry `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers.

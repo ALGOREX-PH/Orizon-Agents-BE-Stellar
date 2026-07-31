@@ -103,11 +103,31 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 | `API_KEY` | *(unset)* | when set, `/api/stellar/server/*` and all non-public `/api/pdax/*` routes require a matching `X-API-Key` header |
 | `TASK_AUTH_REQUIRED` | `false` | when true, task/trace/artifact reads require the per-task `read_token` returned by execute |
 | `ORCHESTRATOR_MAX_CONCURRENT` | `8` | in-flight workflow ceiling — excess execute calls get a 503 `capacity_exhausted` |
-| `RATE_LIMIT_PER_MINUTE` | `120` | per-client-IP request budget (sliding 60 s window) |
+| `RATE_LIMIT_PER_MINUTE` | `1200` | request budget per resolved client key (sliding 60 s window) — see below |
+| `TRUSTED_PROXY_HOPS` | `0` | how many **trailing** `X-Forwarded-For` entries are this deployment's own infrastructure and are skipped when resolving the client |
+| `FORWARDED_CHAIN_SAMPLES` | `5` | log the raw forwarded chain + resolved key for the first N non-exempt requests after each restart (`0` disables) |
 | `MAX_CHARGE_USDC` | `100` | server-side ceiling for a single `PaymentEscrow.charge`, in USDC |
 | `DOCS_ENABLED` | `true` | serve `/docs`, `/redoc`, and `/openapi.json` |
 
 Everything else (model IDs, contract addresses, RPC, PDAX sandbox) is documented in `.env.example` — copy it to `.env` and fill in what you need.
+
+### Rate limiting and the proxy trust boundary
+
+`X-Forwarded-For` is append-only — each proxy adds the address of the peer it received the request from — so the chain reads `<anything the caller sent>, <caller's address>, <our edge>, …` and only the **rightmost** entries were written by infrastructure we control. `TRUSTED_PROXY_HOPS` says how many of those trailing entries are ours; `client_key()` (`app/security.py`) drops them, and the entry to their left becomes the rate-limit bucket and the access log's `client=` field.
+
+**The budget is currently effectively global.** The default of `0` drops nothing and keys on the last entry, which is the address this deployment's own edge appends — the same value for every visitor. `RATE_LIMIT_PER_MINUTE` therefore behaves as one budget for the whole service rather than one per visitor, and `client=` is a constant in every access line, so abuse cannot be attributed during an incident. The default is `0` on purpose: it reproduces the behaviour this service has always had, so nothing changes until the hop count is tuned against a chain actually observed from production. The limit is sized for that reading — an open dashboard tab polls two endpoints every 5 s (24 req/min), so `1200` seats roughly 50 concurrent tabs, where the old `120` seated five. Both liveness probes are exempt, and the frontend backs off on `429` and honours `Retry-After`.
+
+Setting it **too high** is the worse failure and is equally silent: the resolved entry becomes one the *caller* wrote, so anyone can mint a fresh bucket per request by rotating a header value and the limiter stops limiting. A chain too short to contain a client entry resolves to the literal `forwarded-chain-too-short` rather than clamping to the leftmost (caller-controlled) entry — seeing that as `client=` means the value is set higher than the chain this edge actually produces.
+
+**Verifying the hop count from logs.** The number of entries Vercel's rewrite proxy and Render's edge each contribute is not observable from outside, so read it off production. After any restart (changing an env var in the Render dashboard triggers one), the first `FORWARDED_CHAIN_SAMPLES` non-exempt requests each log one line to Render's log stream:
+
+```
+forwarded chain sample 1/5 on GET /api/agents: entries=3 chain=['203.0.113.50', '76.76.21.9', '10.201.3.4']
+peer=203.0.113.50 TRUSTED_PROXY_HOPS=0 resolves client=10.201.3.4 — set TRUSTED_PROXY_HOPS to the number of
+TRAILING entries this edge appends, so the one to their left is the visitor
+```
+
+Load the console in a browser, then read one sample line: count the trailing entries that are *not* the visitor (Render's edge, plus Vercel's egress if the request came through `orizons.xyz`) and set `TRUSTED_PROXY_HOPS` to that count. Confirm by watching `client=` in the access lines vary between visitors instead of repeating. The sample line and the access line for the same request share an `X-Request-ID`, so they can be read side by side. This is deliberately a log sample and not a diagnostic endpoint — the chain contains visitors' IP addresses, and `API_KEY` is empty on demo deployments, so a route could not be reliably gated; after the budget is spent the cost is a single integer comparison per request.
 
 ## Deploy — Render (recommended)
 
