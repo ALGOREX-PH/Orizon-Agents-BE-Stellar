@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import pytest
 
@@ -500,6 +501,56 @@ def test_events_we_never_act_on_stay_quiet(caplog):
     with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
         asyncio.run(run())
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_abandoned_offramp_payout_details_expire(caplog):
+    """An off-ramp whose agent never sends the USDC must not hold the
+    beneficiary's account number for the life of the process — it is only
+    popped on terminal advance or after 500 newer ramps evict it."""
+    client = _offramp_client()
+
+    async def run():
+        return await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+
+    record = asyncio.run(run())
+    assert record.ramp_id in ramp._PAYOUTS
+    # Inside the payment window the ramp may still settle: PII stays.
+    ramp.expire_payouts(now=time.monotonic() + ramp.PAYOUT_STASH_TTL_SECONDS - 1)
+    assert record.ramp_id in ramp._PAYOUTS
+    with caplog.at_level(logging.INFO, logger="app.pdax.ramp"):
+        ramp.expire_payouts(now=time.monotonic() + ramp.PAYOUT_STASH_TTL_SECONDS + 1)
+    assert ramp._PAYOUTS == {}
+    assert any("dropped abandoned off-ramp payout details" in r.getMessage() for r in caplog.records)
+
+
+def test_starting_an_offramp_sweeps_stale_payouts(monkeypatch):
+    """The sweep is event-driven (no background task), so a later off-ramp
+    clears an abandoned one."""
+    client = _offramp_client()
+    monkeypatch.setattr(ramp, "PAYOUT_STASH_TTL_SECONDS", -1.0)
+
+    async def run():
+        first = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        second = await ramp.start_offramp(client, OffRampRequest(**{**OFFRAMP_REQ, "identifier": "off-2"}))
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first.ramp_id not in ramp._PAYOUTS
+    assert list(ramp._PAYOUTS) == [second.ramp_id]
+
+
+def test_expired_payout_fails_the_advance_rather_than_paying_a_stale_beneficiary(monkeypatch):
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        monkeypatch.setattr(ramp, "PAYOUT_STASH_TTL_SECONDS", -1.0)
+        return await ramp.advance_offramp(client, record)
+
+    advanced = asyncio.run(run())
+    assert advanced.status == "failed"
+    assert advanced.error == "missing_payout_details"
+    assert "v1/fiat/withdraw" not in client.calls
 
 
 def test_advance_offramp_without_payout_fails_cleanly():

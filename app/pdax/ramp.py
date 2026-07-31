@@ -16,8 +16,10 @@ event to a waiting ramp and advances it. The relevant Stellar asset is USDCXLM.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import NamedTuple
 
 from ..config import settings
 from . import funding, money, ramp_store, trade, transactions, withdrawals
@@ -289,13 +291,15 @@ async def start_offramp(client: PdaxClient, req: OffRampRequest) -> RampRecord:
         record.status, record.error = "failed", _log_failure(record, "deposit_address", e)
         ramp_store.add_stage(record, "deposit_address", "failed", record.error)
     # Stash the beneficiary payout details for the advance step.
-    _PAYOUTS[record.ramp_id] = req
+    _stash_payout(record.ramp_id, req)
     return ramp_store.save(record)
 
 
 async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
     """USDC has arrived — sell it for PHP then withdraw to the bank account."""
-    payout = _PAYOUTS.get(record.ramp_id)
+    expire_payouts()
+    stash = _PAYOUTS.get(record.ramp_id)
+    payout = stash.request if stash else None
     if payout is None:
         # USDC has landed but the beneficiary details are gone (process
         # restart, or eviction): the customer's crypto is in the PDAX account
@@ -510,5 +514,43 @@ async def handle_event(client: PdaxClient, event: CryptoEvent | FiatEvent) -> Ra
         return await _advance_guarded(client, record, advance)
 
 
+# How long an off-ramp may sit awaiting its USDC before the stashed payout
+# details are treated as abandoned. Sized to the ramp's payment window: the
+# agent sends USDC immediately after `start_offramp` returns the deposit
+# address, so an hour is generous, and a ramp that quiet is not settling
+# unattended anyway.
+PAYOUT_STASH_TTL_SECONDS = 3600.0
+
+
+class _PayoutStash(NamedTuple):
+    """A stashed `OffRampRequest` plus when it was stashed (monotonic clock)."""
+
+    created_at: float
+    request: OffRampRequest
+
+
 # Beneficiary payout details for in-flight off-ramps (kept beside the store).
-_PAYOUTS: dict[str, OffRampRequest] = {}
+# This is the most sensitive structure in the process — full bank account
+# number, account name and both parties' names — so it is swept on every
+# touch rather than only on terminal advance / store eviction.
+_PAYOUTS: dict[str, _PayoutStash] = {}
+
+
+def _stash_payout(ramp_id: str, req: OffRampRequest) -> None:
+    expire_payouts()
+    _PAYOUTS[ramp_id] = _PayoutStash(time.monotonic(), req)
+
+
+def expire_payouts(*, now: float | None = None) -> None:
+    """Drop beneficiary PII for off-ramps that were never funded.
+
+    An off-ramp whose agent never sends the USDC is otherwise held for the
+    life of the process — the record is only popped on terminal advance or on
+    store eviction, which takes 500 newer ramps. `now` is injectable so the
+    expiry is deterministic in tests, as elsewhere in this package.
+    """
+    cutoff = (time.monotonic() if now is None else now) - PAYOUT_STASH_TTL_SECONDS
+    stale = [rid for rid, stash in _PAYOUTS.items() if stash.created_at < cutoff]
+    for ramp_id in stale:
+        del _PAYOUTS[ramp_id]
+        logger.info("dropped abandoned off-ramp payout details: ramp_id=%s", ramp_id)
