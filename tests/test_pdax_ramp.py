@@ -1,6 +1,8 @@
 """Ramp orchestration against a fake PdaxClient: full on/off-ramp lifecycle,
-duplicate-webhook idempotency, and off-ramp payout PII dropped once the
-advance step finishes (success or failure)."""
+duplicate-webhook idempotency, unmatched settlement events being warned about
+rather than dropped, failed ramps exposing a code instead of upstream text,
+and off-ramp payout PII dropped once the advance step finishes (success or
+failure) or the payment window expires."""
 
 from __future__ import annotations
 

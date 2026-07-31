@@ -390,8 +390,9 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
         # Payout PII (names, bank code, account number) lives only while the
         # ramp is in flight — drop it as soon as the advance step reaches a
         # terminal state (completed or failed). An unexpected escape leaves it
-        # in place so a reconcile re-entry can still pay out; the store's
-        # eviction path still drops it if the ramp never resumes.
+        # in place so a reconcile re-entry can still pay out; the TTL sweep
+        # (expire_payouts) and the store's eviction path both still drop it if
+        # the ramp never resumes.
         if record.status in ("completed", "failed"):
             _PAYOUTS.pop(record.ramp_id, None)
 
