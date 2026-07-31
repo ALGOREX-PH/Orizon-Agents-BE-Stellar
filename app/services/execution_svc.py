@@ -388,6 +388,12 @@ async def _settle_onchain(
 
     Returns (charge_tx, proof_tx, job_id); either tx may be None if that step
     failed, and job_id is None when the charge failed or was skipped.
+
+    Every failure here is money-affecting (a charge that never landed, or a
+    charge that landed with no attestation sealed against it), so each one is
+    logged as well as traced: trace lines live in state.traces, which is evicted
+    after 200 tasks and lost on every restart. The log carries the task, auth,
+    payer and amount — never the signing key or raw signed XDR.
     """
     from stellar_sdk import scval as _sv
 
@@ -398,6 +404,14 @@ async def _settle_onchain(
     settled_job_id: bytes | None = None
 
     if not settings.stellar_signing_key:
+        logger.error(
+            "task %s: STELLAR_SIGNING_KEY not set — skipping on-chain charge/seal "
+            "(auth %s, payer %s, %.6f USDC unbilled)",
+            task_id,
+            auth_id_hex,
+            payer,
+            total_usdc,
+        )
         await _emit(
             task_id,
             start,
@@ -434,6 +448,17 @@ async def _settle_onchain(
                 f"x402 charge → {total_usdc:.3f} USDC settled · tx {charge_tx[:10]}…",
             )
         else:
+            logger.error(
+                "task %s: PaymentEscrow.charge did not settle — status=%s hash=%s "
+                "(auth %s, payer %s, %.6f USDC, job %s)",
+                task_id,
+                charge.get("status"),
+                charge_tx,
+                auth_id_hex,
+                payer,
+                total_usdc,
+                job_id.hex(),
+            )
             await _emit(
                 task_id,
                 start,
@@ -482,6 +507,20 @@ async def _settle_onchain(
                 f"{time.monotonic() - start:.2f}s",
             )
         else:
+            # The charge already settled, so this leaves paid work unattested —
+            # the one state that has to be reconstructable from the logs.
+            logger.error(
+                "task %s: AttestationRegistry.seal did not settle — status=%s hash=%s "
+                "(job %s charged %.6f USDC via tx %s, auth %s, payer %s)",
+                task_id,
+                seal.get("status"),
+                proof_tx,
+                job_id.hex(),
+                total_usdc,
+                charge_tx,
+                auth_id_hex,
+                payer,
+            )
             await _emit(
                 task_id,
                 start,
@@ -489,6 +528,17 @@ async def _settle_onchain(
                 f"seal status={seal.get('status')} hash={proof_tx}",
             )
     except Exception as e:
+        logger.error(
+            "task %s: on-chain settlement failed: %s (auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
+            task_id,
+            e,
+            auth_id_hex,
+            payer,
+            total_usdc,
+            charge_tx,
+            proof_tx,
+            exc_info=True,
+        )
         await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
 
     return (charge_tx, proof_tx, settled_job_id)
@@ -505,8 +555,10 @@ async def _submit_ratings(
 ) -> None:
     """Submit the settler's synthetic per-step ratings to ReputationLedger.
 
-    Best-effort by design: a failed rating never fails the workflow — each
-    step logs its own trace line and the loop moves on.
+    Best-effort by design: a failed rating never fails the workflow — each step
+    traces and logs its own failure and the loop moves on. It is logged as well
+    as traced because a rating that silently never landed skews the on-chain
+    reputation the planner reads, and traces do not survive a restart.
     """
     if not (settings.reputation_enabled and settings.stellar_reputation_ledger and settings.stellar_signing_key):
         return
@@ -538,6 +590,18 @@ async def _submit_ratings(
                 f"reputation → {step.agent_name} rated {rating}/100 · tx {tx[:10]}…",
             )
         except Exception as e:
+            logger.error(
+                "task %s: reputation submit failed for %s (%s): %s (job %s, rating %d, weight %d, payer %s)",
+                task_id,
+                step.agent_name,
+                step.agent_id,
+                e,
+                job_id.hex(),
+                rating,
+                weight,
+                payer,
+                exc_info=True,
+            )
             await _emit(
                 task_id,
                 start,
