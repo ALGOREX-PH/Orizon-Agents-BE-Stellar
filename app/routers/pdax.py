@@ -374,6 +374,12 @@ async def webhook_receive(request: Request) -> dict:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(400, detail="invalid webhook payload") from e
+    if not isinstance(payload, dict):
+        # Valid JSON, wrong shape: a signed array (or scalar) body reaches
+        # event_key/parse_event, which index it by key. That is malformed
+        # input, not a server fault — 400, never the AttributeError 500 it
+        # used to raise before the claim was even taken.
+        raise HTTPException(400, detail="invalid webhook payload")
     # Idempotency — a retried delivery must not advance a ramp twice.
     key = pw.event_key(payload)
     if not pw.claim_event(key):
