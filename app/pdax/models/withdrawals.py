@@ -11,59 +11,70 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+# Field bounds, matching the ramp models (app/pdax/models/ramp.py): 200 for a
+# name-or-address-sized field, 64 for an enum-ish channel token. Without them
+# these fields are capped only by the 1 MiB body limit.
+_TEXT = 200
+_TOKEN = 64
+# The ramp derives this identifier as f"{offramp.identifier}-payout", so leave
+# headroom above the 128 an OnRampRequest identifier allows.
+_IDENTIFIER = 160
+# Free text: a payment instruction legitimately runs longer than a name.
+_INSTRUCTIONS = 500
+
 
 class FiatWithdrawRequest(BaseModel):
     """Body for POST /v1/fiat/withdraw."""
 
-    identifier: str
-    amount: str
-    currency: str = Field("PHP", description="PHP only")
-    method: str = Field(..., description="PAY-TO-ACCOUNT-REAL-TIME | -NON-REAL-TIME")
-    fee_type: str = Field(..., description="Sender | Beneficiary")
+    identifier: str = Field(..., max_length=_IDENTIFIER)
+    amount: str = Field(..., max_length=_TOKEN)
+    currency: str = Field(default="PHP", max_length=_TOKEN, description="PHP only")
+    method: str = Field(..., max_length=_TOKEN, description="PAY-TO-ACCOUNT-REAL-TIME | -NON-REAL-TIME")
+    fee_type: str = Field(..., max_length=_TOKEN, description="Sender | Beneficiary")
 
     # Sender
-    sender_first_name: str
-    sender_middle_name: str = "n.a."
-    sender_last_name: str
-    sender_country_origin: str
-    sender_address_line_one: str | None = None
-    sender_address_line_two: str | None = None
-    sender_city: str | None = None
-    sender_province: str | None = None
-    sender_country: str | None = None
-    sender_zip_code: str | None = None
-    sender_phone_number: str | None = None
-    sender_nationality: str | None = None
-    sender_national_identity_number: str | None = None
-    sender_dob: str | None = None
-    sender_place_of_birth: str | None = None
-    source_of_funds: str
-    sender_email: str | None = None
+    sender_first_name: str = Field(..., max_length=_TEXT)
+    sender_middle_name: str = Field(default="n.a.", max_length=_TEXT)
+    sender_last_name: str = Field(..., max_length=_TEXT)
+    sender_country_origin: str = Field(..., max_length=_TEXT)
+    sender_address_line_one: str | None = Field(default=None, max_length=_TEXT)
+    sender_address_line_two: str | None = Field(default=None, max_length=_TEXT)
+    sender_city: str | None = Field(default=None, max_length=_TEXT)
+    sender_province: str | None = Field(default=None, max_length=_TEXT)
+    sender_country: str | None = Field(default=None, max_length=_TEXT)
+    sender_zip_code: str | None = Field(default=None, max_length=_TOKEN)
+    sender_phone_number: str | None = Field(default=None, max_length=_TOKEN)
+    sender_nationality: str | None = Field(default=None, max_length=_TEXT)
+    sender_national_identity_number: str | None = Field(default=None, max_length=_TEXT)
+    sender_dob: str | None = Field(default=None, max_length=_TOKEN)
+    sender_place_of_birth: str | None = Field(default=None, max_length=_TEXT)
+    source_of_funds: str = Field(..., max_length=_TEXT)
+    sender_email: str | None = Field(default=None, max_length=_TEXT)
 
     # Beneficiary
-    beneficiary_first_name: str
-    beneficiary_middle_name: str = "n.a."
-    beneficiary_last_name: str
-    beneficiary_sex: str | None = None
-    beneficiary_nationality: str | None = None
-    beneficiary_dob: str | None = None
-    beneficiary_bank_code: str
-    beneficiary_account_name: str
-    beneficiary_account_number: str
-    beneficiary_address_line_one: str | None = None
-    beneficiary_address_line_two: str | None = None
-    beneficiary_barangay: str | None = None
-    beneficiary_city: str | None = None
-    beneficiary_province: str | None = None
-    beneficiary_country: str | None = None
-    beneficiary_zip_code: str | None = None
-    beneficiary_government_issued_id: str | None = None
-    beneficiary_phone_number: str | None = None
+    beneficiary_first_name: str = Field(..., max_length=_TEXT)
+    beneficiary_middle_name: str = Field(default="n.a.", max_length=_TEXT)
+    beneficiary_last_name: str = Field(..., max_length=_TEXT)
+    beneficiary_sex: str | None = Field(default=None, max_length=_TOKEN)
+    beneficiary_nationality: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_dob: str | None = Field(default=None, max_length=_TOKEN)
+    beneficiary_bank_code: str = Field(..., max_length=_TEXT)
+    beneficiary_account_name: str = Field(..., max_length=_TEXT)
+    beneficiary_account_number: str = Field(..., max_length=_TEXT)
+    beneficiary_address_line_one: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_address_line_two: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_barangay: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_city: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_province: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_country: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_zip_code: str | None = Field(default=None, max_length=_TOKEN)
+    beneficiary_government_issued_id: str | None = Field(default=None, max_length=_TEXT)
+    beneficiary_phone_number: str | None = Field(default=None, max_length=_TOKEN)
 
-    purpose: str
-    relationship_of_sender_to_beneficiary: str
-    nature_of_business: str | None = None
-    instructions: str | None = None
+    purpose: str = Field(..., max_length=_TEXT)
+    relationship_of_sender_to_beneficiary: str = Field(..., max_length=_TEXT)
+    nature_of_business: str | None = Field(default=None, max_length=_TEXT)
+    instructions: str | None = Field(default=None, max_length=_INSTRUCTIONS)
 
 
 class RetryMethod(BaseModel):

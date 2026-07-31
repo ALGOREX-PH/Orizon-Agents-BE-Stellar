@@ -74,6 +74,45 @@ def test_pdax_health_needs_no_api_key(client, hermetic_settings, monkeypatch):
     assert body["configured"] is False
 
 
+def test_fiat_withdraw_rejects_unbounded_fields(client, hermetic_settings):
+    """The withdrawal body's string fields used to be capped only by the 1 MiB
+    request-body limit — a 100k-character beneficiary name reached PDAX."""
+    hermetic_settings.api_key = "secret-key"
+    for field, size in [
+        ("beneficiary_account_number", 201),
+        ("beneficiary_account_name", 201),
+        ("sender_first_name", 201),
+        ("identifier", 161),
+        ("instructions", 501),
+        ("method", 65),
+    ]:
+        r = client.post(
+            "/api/pdax/fiat/withdraw",
+            json={**WITHDRAW_BODY, field: "x" * size},
+            headers={"X-API-Key": "secret-key"},
+        )
+        assert r.status_code == 422, field
+
+
+def test_fiat_withdraw_accepts_fields_at_the_bound(client, hermetic_settings, monkeypatch):
+    """The bounds are generous enough for real data — they reject abuse, not
+    a long legitimate name."""
+    hermetic_settings.api_key = "secret-key"
+
+    async def fake_fiat_withdraw(client_, req):
+        return _fake_result()
+
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    monkeypatch.setattr("app.pdax.withdrawals.fiat_withdraw", fake_fiat_withdraw)
+
+    r = client.post(
+        "/api/pdax/fiat/withdraw",
+        json={**WITHDRAW_BODY, "beneficiary_account_name": "x" * 200, "instructions": "y" * 500},
+        headers={"X-API-Key": "secret-key"},
+    )
+    assert r.status_code == 200
+
+
 def test_x402_rejects_crlf_agent_id(client):
     r = client.post(
         "/api/payments/x402",

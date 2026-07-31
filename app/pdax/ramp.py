@@ -21,6 +21,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import NamedTuple
 
+from pydantic import ValidationError
+
 from ..config import settings
 from . import funding, money, ramp_store, trade, transactions, withdrawals
 from .client import PdaxClient
@@ -345,9 +347,13 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
 
         record.status = "settling"
         try:
-            result = await withdrawals.fiat_withdraw(
-                client,
-                FiatWithdrawRequest(
+            # FiatWithdrawRequest bounds its fields; some of the OffRampRequest
+            # fields feeding it do not, and the derived "-payout" identifier is
+            # longer than the one the caller sent. A local ValidationError here
+            # would escape as a 500 and strand a funded ramp, so fold it into
+            # the same failed-stage path as any upstream rejection.
+            try:
+                withdraw_request = FiatWithdrawRequest(
                     identifier=f"{payout.identifier}-payout",
                     amount=_num(record.php_amount),
                     currency=PHP,
@@ -364,8 +370,13 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
                     beneficiary_account_number=payout.beneficiary_account_number,
                     purpose=payout.purpose,
                     relationship_of_sender_to_beneficiary=payout.relationship_of_sender_to_beneficiary,
-                ),
-            )
+                )
+            except ValidationError as e:
+                raise PdaxError(
+                    "payout details do not fit a fiat withdrawal request",
+                    code="invalid_withdraw_request",
+                ) from e
+            result = await withdrawals.fiat_withdraw(client, withdraw_request)
             record.withdraw_request_id = result.request_id
             record.status = "completed" if result.status != "FAILED" else "failed"
             ramp_store.add_stage(record, "fiat_withdraw", "success", result.status)

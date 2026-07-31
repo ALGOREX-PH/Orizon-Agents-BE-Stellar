@@ -553,6 +553,22 @@ def test_expired_payout_fails_the_advance_rather_than_paying_a_stale_beneficiary
     assert "v1/fiat/withdraw" not in client.calls
 
 
+def test_oversized_payout_field_fails_the_ramp_not_the_process():
+    """OffRampRequest leaves some fields unbounded while FiatWithdrawRequest
+    bounds them, so the withdrawal body can fail local validation. That must
+    land as a failed stage, not a ValidationError 500 on a funded ramp."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**{**OFFRAMP_REQ, "sender_first_name": "A" * 300}))
+        return await ramp.advance_offramp(client, record)
+
+    advanced = asyncio.run(run())
+    assert advanced.status == "failed"
+    assert advanced.error == "invalid_withdraw_request"
+    assert "v1/fiat/withdraw" not in client.calls  # never left the process
+
+
 def test_advance_offramp_without_payout_fails_cleanly():
     client = _offramp_client()
 
