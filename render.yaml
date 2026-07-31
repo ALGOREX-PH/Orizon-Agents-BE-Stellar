@@ -21,6 +21,12 @@ services:
         sync: false
       - key: STELLAR_SIGNING_KEY
         sync: false
+      # REQUIRED whenever this service holds money-capable credentials — a
+      # mainnet STELLAR_SIGNING_KEY or production PDAX credentials. The config
+      # validator refuses to boot without it, because an empty API_KEY makes
+      # require_api_key a no-op and leaves the withdrawal, charge and seal
+      # routes anonymous. Clearing this value takes the service down; that is
+      # deliberate, and safer than serving those routes unauthenticated.
       - key: API_KEY
         sync: false
 
