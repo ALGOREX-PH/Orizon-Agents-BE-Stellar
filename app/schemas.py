@@ -23,16 +23,31 @@ class Agent(BaseModel):
 TaskStatus = Literal["pending", "running", "complete", "failed"]
 
 
-class Task(BaseModel):
+class TaskSummary(BaseModel):
+    """A task without its artifact — the shape the task list is served in.
+
+    An artifact carries `files[*].content` plus a byte-identical `preview_html`
+    (30–38 KB for a baked kit), so a completed task is ~70 KB. The dashboard
+    polls the list every 5s and reads none of it, which made a full list ~1.4 MB
+    per poll per open tab. Listing summaries keeps the poll cheap; the payload
+    is served by GET /tasks/{id}/artifact, the one place it is actually read.
+    """
+
     id: str
     intent: str
     agents: int
     spent: float
     status: TaskStatus
     started: str  # human-readable ("2m ago")
-    artifact: dict | None = None
     charge_tx: str | None = None
     proof_tx: str | None = None
+
+
+class Task(TaskSummary):
+    """A stored task, artifact included. This is what app state holds and what
+    the per-task routes serve; only the list route narrows to TaskSummary."""
+
+    artifact: dict | None = None
 
 
 # ───── Artifacts ──────────────────────────────────────────

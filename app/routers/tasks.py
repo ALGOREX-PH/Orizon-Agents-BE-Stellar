@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import settings
-from ..schemas import Task
+from ..schemas import Task, TaskSummary
 from ..state import state
 from ..task_auth import require_task_read
 
@@ -22,8 +22,12 @@ class ArtifactResponse(BaseModel):
     proof_tx: str | None = None
 
 
-@router.get("/tasks", response_model=list[Task], summary="List recent tasks")
+@router.get("/tasks", response_model=list[TaskSummary], summary="List recent tasks")
 async def list_tasks(limit: int = Query(20, ge=1, le=200)) -> list[Task]:
+    # response_model narrows every row to TaskSummary, dropping the artifact:
+    # this route is polled every 5 seconds and no client reads the field from
+    # it. GET /tasks/{id}/artifact serves the payload on demand.
+    #
     # Task reads are capability-token-scoped when enforcement is on — the
     # global list would leak every task id and intent, so it goes empty
     # (not 404/401) and the frontend keeps working unmodified.
