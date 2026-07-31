@@ -203,17 +203,23 @@ class CodeGen(Worker):
         )
 
     def _artifact_dict(self, out: CodeArtifact) -> dict[str, Any]:
+        from .code_validator import harden_artifact
+
         preview = out.preview_html
         if not preview.strip():
             entry_file = next((f for f in out.files if f.path == out.entry), out.files[0])
             preview = entry_file.content
-        return {
-            "title": out.title,
-            "summary": out.summary,
-            "files": [f.model_dump() for f in out.files],
-            "entry": out.entry,
-            "preview_html": preview,
-        }
+        # Every artifact leaves this worker hardened — the model's output is
+        # untrusted markup that the frontend renders.
+        return harden_artifact(
+            {
+                "title": out.title,
+                "summary": out.summary,
+                "files": [f.model_dump() for f in out.files],
+                "entry": out.entry,
+                "preview_html": preview,
+            }
+        )
 
     @staticmethod
     def _context_block(context: dict[str, Any] | None) -> str:
@@ -304,7 +310,7 @@ class CodeGen(Worker):
         import random
 
         # Lazy import — avoids a hard dependency cycle between code_gen ↔ code_validator
-        from .code_validator import validate_html
+        from .code_validator import harden_artifact, validate_html
 
         # ── Baked-artifact fast path ───────────────────────────────────────
         # When the kit has a pre-built HTML artifact, skip the LLM and serve
@@ -318,6 +324,10 @@ class CodeGen(Worker):
             if baked:
                 # Mimic generation time so the trace doesn't feel instant.
                 await asyncio.sleep(0.4 + random.random() * 0.6)
+                # Baked artifacts are repo-owned and already clean, but they go
+                # through the same hardening so every artifact the frontend
+                # renders carries the same policy.
+                baked = harden_artifact(baked)
                 html = baked["preview_html"]
                 lines = html.count("\n") + 1
                 return {
