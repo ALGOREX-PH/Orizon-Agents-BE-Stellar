@@ -118,6 +118,7 @@ async def _run(
 ) -> None:
     start = time.monotonic()
     spent = 0.0
+    succeeded = 0  # steps that returned output; drives the terminal status
     last_artifact: dict | None = None
     charge_tx: str | None = None
     proof_tx: str | None = None
@@ -202,6 +203,7 @@ async def _run(
                 await _emit(task_id, start, "error", f"{worker.name} failed: {e}")
                 continue
 
+            succeeded += 1
             spent += step.est_price_usdc
             if not onchain:
                 await _emit(
@@ -254,23 +256,44 @@ async def _run(
             if isinstance(output, dict):
                 context[worker.name] = output
 
+        total_steps = len(plan.plan.steps)
+        status = _terminal_status(total_steps, succeeded, last_artifact)
+
         if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
             charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
             if charge_tx and job_id:
                 await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
-        else:
+        elif status == "complete":
+            # Only a run that actually delivered gets a (simulated) seal — a
+            # workflow that produced nothing has nothing to attest to.
             sim_hash = "0x" + secrets.token_hex(16)
             await _emit(task_id, start, "proof", f"ERC-8004 attestation: {sim_hash} (simulated)")
             await _emit(
                 task_id,
                 start,
                 "proof",
-                f"workflow sealed — {len(plan.plan.steps)} agents · {spent:.3f} USDC · {time.monotonic() - start:.2f}s",
+                f"workflow sealed — {total_steps} agents · {spent:.3f} USDC · {time.monotonic() - start:.2f}s",
             )
 
-        _finalize_task(task_id, "complete", spent, last_artifact, charge_tx, proof_tx)
+        if status != "complete":
+            logger.error(
+                "task %s finalized as %s: %d/%d steps produced output, artifact=%s",
+                task_id,
+                status,
+                succeeded,
+                total_steps,
+                last_artifact is not None,
+            )
+            await _emit(
+                task_id,
+                start,
+                "error",
+                f"workflow incomplete — {succeeded}/{total_steps} agents produced output",
+            )
+
+        _finalize_task(task_id, status, spent, last_artifact, charge_tx, proof_tx)
 
     except asyncio.CancelledError:
         # Shutdown or external cancel: leave the task terminal instead of
@@ -289,6 +312,38 @@ async def _run(
         # (a bare `await asyncio.sleep` here would swallow the close when a
         # CancelledError landed on it).
         await asyncio.shield(_finish_stream(task_id))
+
+
+def _terminal_status(total_steps: int, succeeded: int, artifact: dict | None) -> TaskStatus:
+    """Terminal status for a run that reached the end of its plan.
+
+    Every per-step failure is swallowed (`continue`) so one bad agent can't sink
+    the whole workflow — which means reaching the end of the loop says nothing
+    about what was produced. The rule:
+
+      • all steps produced output → "complete". A zero-step plan is vacuously
+        complete: nothing was asked of the network, so nothing failed.
+      • no step produced output → "failed". This is the total-outage case (key
+        revoked, quota exhausted, provider down): every step raises, the loop
+        continues past all of them, and the caller gets spent=0 and no artifact.
+        Calling that "complete" hands out an empty result and inflates
+        /api/metrics/overview's avg_completion, which is a rate over exactly the
+        two terminal statuses.
+      • partial (some produced output, some failed) → judged on the deliverable:
+        "complete" when an artifact survived, because the caller still receives
+        the thing they asked for, merely degraded (e.g. code.gen drafted and
+        code.critic then failed to polish); "failed" when it did not, because a
+        half-run workflow with nothing to hand back is not a success.
+
+    Only "complete" and "failed" are used: TaskStatus is a closed union the
+    frontend renders as a status badge, so a partial run must land on one side
+    of it rather than inventing a third terminal value.
+    """
+    if succeeded >= total_steps:
+        return "complete"
+    if succeeded == 0:
+        return "failed"
+    return "complete" if artifact else "failed"
 
 
 def _finalize_task(
