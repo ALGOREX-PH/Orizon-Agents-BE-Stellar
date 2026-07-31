@@ -14,6 +14,7 @@ import logging
 
 import pytest
 from pydantic import ValidationError
+from stellar_sdk import Keypair
 
 from app.config import MAINNET_PASSPHRASE, PDAX_ENVIRONMENTS, Settings
 
@@ -239,6 +240,68 @@ def test_otp_secret_padding_matches_the_totp_module(caplog):
 def test_unset_otp_secret_is_quiet(caplog):
     with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
         _settings(pdax_otp_secret="")
+    assert _errors(caplog) == []
+
+
+# ── STELLAR_SIGNING_KEY malformed ───────────────────────────────
+# app/stellar/client.py:_signer_keypair() parses the key lazily, so a typo
+# first surfaces as a 400 charge_failed on a real payment. Reported at
+# startup; never fatal, and the key is never echoed.
+
+# Deterministic throwaway keypair — a literal S… string in the repo would trip
+# secret scanners, and this proves the good-value path with a real key.
+_REAL_SIGNER = Keypair.from_raw_ed25519_seed(bytes(range(32)))
+_BAD_SIGNER = "SBADKEY" + "Z" * 49
+
+
+def test_malformed_signing_key_is_reported_and_still_boots(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _settings(stellar_signing_key=_BAD_SIGNER)
+    assert s.stellar_signing_key == _BAD_SIGNER  # boots — never fatal
+    assert any("STELLAR_SIGNING_KEY" in m for m in _errors(caplog))
+
+
+def test_signing_key_report_never_echoes_the_secret(caplog):
+    # The SDK's own error quotes the rejected seed back; nothing derived from
+    # it may reach the log, in whole or in part.
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(stellar_signing_key=_BAD_SIGNER)
+    messages = _errors(caplog)
+    assert messages
+    for message in messages:
+        assert _BAD_SIGNER not in message
+        for start in range(0, len(_BAD_SIGNER) - 7):
+            assert _BAD_SIGNER[start : start + 8] not in message
+    assert not [r for r in caplog.records if r.name == CONFIG_LOGGER and r.exc_info]
+
+
+def test_valid_secret_key_is_quiet(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        s = _settings(stellar_signing_key=_REAL_SIGNER.secret)
+    assert _errors(caplog) == []
+    assert s.stellar_signing_key == _REAL_SIGNER.secret
+
+
+def test_valid_mnemonic_is_quiet(caplog):
+    # _signer_keypair() also accepts a 12/24-word BIP-39 phrase; the startup
+    # report must accept everything that function can build.
+    phrase = "illness spike retreat truth genius clock brain pass fit cave bargain toe"
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(stellar_signing_key=phrase)
+    assert _errors(caplog) == []
+    assert Keypair.from_mnemonic_phrase(phrase)
+
+
+def test_malformed_mnemonic_is_reported(caplog):
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(stellar_signing_key=" ".join(["notaword"] * 12))
+    assert any("STELLAR_SIGNING_KEY" in m for m in _errors(caplog))
+
+
+def test_unset_signing_key_is_quiet(caplog):
+    # Read-only deployments are legitimate and must stay silent.
+    with caplog.at_level(logging.ERROR, logger=CONFIG_LOGGER):
+        _settings(stellar_signing_key="")
     assert _errors(caplog) == []
 
 

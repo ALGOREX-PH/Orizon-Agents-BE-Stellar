@@ -289,6 +289,49 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _report_malformed_stellar_signing_key(self) -> "Settings":
+        """Name a malformed STELLAR_SIGNING_KEY at startup, not on the money path.
+
+        _signer_keypair() (app/stellar/client.py) parses the key lazily and
+        memoizes it, so a bad key boots clean and first shows up as a
+        400 charge_failed on a real payment — the worst possible place to
+        learn about a typo. The two accepted forms below are that function's,
+        so a key this reports as good is one it can build.
+
+        Logged rather than raised: an unparseable key signs nothing, so it
+        fails closed; the exposure the fail-fast validators guard against is
+        the opposite case, a key that works. Raising here would also hand any
+        future key-format drift the power to brick a live mainnet deploy.
+
+        The key is a bearer credential for real funds: this reports the
+        variable and never the value. stellar_sdk's own exception text quotes
+        the rejected seed back, so the exception is deliberately swallowed
+        (no message interpolation, no exc_info) rather than logged.
+        """
+        secret = self.stellar_signing_key.strip()
+        if not secret:
+            return self
+        # Imported here, not at module scope: app.config is imported by
+        # everything (including the smoke scripts) and stellar_sdk costs
+        # ~250ms to import. This runs once, at construction.
+        from stellar_sdk import Keypair
+
+        words = secret.split()
+        try:
+            if len(words) >= 12:
+                Keypair.from_mnemonic_phrase(" ".join(words))
+            else:
+                Keypair.from_secret(secret)
+        except Exception:
+            logger.error(
+                "STELLAR_SIGNING_KEY is malformed — it is neither a valid S… secret key nor a "
+                "valid 12/24-word mnemonic phrase (the value is withheld from this log). Every "
+                "backend-signed transaction will fail, so /api/stellar/server/charge and "
+                "/server/seal will answer 400 charge_failed. Re-inject the key from host secrets."
+            )
+        return self
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
