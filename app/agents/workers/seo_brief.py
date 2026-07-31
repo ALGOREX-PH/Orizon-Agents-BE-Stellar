@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from ...config import settings
 from ..model_factory import build_openai_chat
 from .base import Worker
+from .prompt_safety import worker_prompt
 
 
 class SeoBriefOutput(BaseModel):
@@ -66,7 +67,7 @@ class SeoBrief(Worker):
             }
 
         # ── Free-form path: LLM ─────────────────────────────────────────────
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nReturn the SEO brief."
+        prompt = worker_prompt(intent, rationale, "Return the SEO brief.")
         result = await self._agent.arun(prompt)
         out: SeoBriefOutput = result.content  # type: ignore[assignment]
         return {

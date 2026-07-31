@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 # ───── Registry ────────────────────────────────────────────
 AgentStatus = Literal["online", "idle", "offline"]
@@ -23,16 +24,57 @@ class Agent(BaseModel):
 TaskStatus = Literal["pending", "running", "complete", "failed"]
 
 
-class Task(BaseModel):
+def humanize_age(seconds: float) -> str:
+    """Coarse relative age, e.g. 125.0 → "2m ago". Clock skew reads "just now"."""
+    if seconds < 10:
+        return "just now"
+    if seconds < 60:
+        return f"{int(seconds)}s ago"
+    if seconds < 3_600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86_400:
+        return f"{int(seconds // 3_600)}h ago"
+    return f"{int(seconds // 86_400)}d ago"
+
+
+class TaskSummary(BaseModel):
+    """A task without its artifact — the shape the task list is served in.
+
+    An artifact carries `files[*].content` plus a byte-identical `preview_html`
+    (30–38 KB for a baked kit), so a completed task is ~70 KB. The dashboard
+    polls the list every 5s and reads none of it, which made a full list ~1.4 MB
+    per poll per open tab. Listing summaries keeps the poll cheap; the payload
+    is served by GET /tasks/{id}/artifact, the one place it is actually read.
+    """
+
     id: str
     intent: str
     agents: int
     spent: float
     status: TaskStatus
-    started: str  # human-readable ("2m ago")
-    artifact: dict | None = None
+    # Unix epoch seconds — the machine-readable truth, and what a client should
+    # format itself. Pre-rendering a relative string server-side is what froze
+    # the old `started` field at "just now": it was written once at creation and
+    # nothing ever recomputed it, so hours-old rows still claimed to be seconds
+    # old. `started` below stays in the payload, unchanged in type, because the
+    # dashboard renders it verbatim (`started: string` in lib/types.ts) — but it
+    # is now derived, never stored, so it cannot go stale again.
+    started_at: float = Field(default_factory=time.time)
     charge_tx: str | None = None
     proof_tx: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def started(self) -> str:
+        """Human-readable age ("2m ago"), computed at serialization time."""
+        return humanize_age(time.time() - self.started_at)
+
+
+class Task(TaskSummary):
+    """A stored task, artifact included. This is what app state holds and what
+    the per-task routes serve; only the list route narrows to TaskSummary."""
+
+    artifact: dict | None = None
 
 
 # ───── Artifacts ──────────────────────────────────────────

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import uuid
 
 import pytest
@@ -117,6 +118,23 @@ def test_valid_hmac_accepts_and_parses_event(client, monkeypatch):
     assert body["event"]["asset"] == "USDCXLM"
     assert body["event"]["amount"] == 5.0
     assert body["ramp"] is None  # no waiting ramp matched
+    assert body["matched"] is False
+
+
+def test_unmatched_settlement_is_200_but_flagged_and_logged(client, monkeypatch, caplog):
+    """PDAX retries non-2xx, and ramp state is process-local: an event that
+    matches nothing now will match nothing on redelivery either. So the
+    delivery is accepted (no retry storm) but reported as matched=false and
+    logged at warning, which is what an operator acts on."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    payload = _crypto_payload()
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        r = _post_signed(client, payload)
+    assert r.status_code == 200
+    assert r.json()["matched"] is False
+    warnings = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.WARNING]
+    assert any("unmatched settlement event" in m and payload["identifier"] in m for m in warnings), warnings
 
 
 def test_duplicate_delivery_is_rejected_idempotently(client, monkeypatch):
@@ -143,6 +161,38 @@ def test_bad_json_with_valid_signature_is_400(client, monkeypatch):
         },
     )
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("body", [[{"identifier": "x"}], "just-a-string", 42, None])
+def test_signed_non_object_body_is_400_not_500(client, monkeypatch, body):
+    """A correctly signed body that isn't a JSON object still reaches
+    event_key/parse_event, which index it by key. Malformed input is the
+    caller's fault (400), not ours (500)."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    raw = json.dumps(body).encode()
+    r = client.post(
+        "/api/pdax/webhooks/receive",
+        content=raw,
+        headers={
+            "content-type": "application/json",
+            "x-pdax-signature": _sign("s3cret", raw),
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "invalid webhook payload"
+
+
+def test_non_object_body_takes_no_idempotency_claim(client, monkeypatch):
+    """The 400 must happen before claim_event, so nothing is left claimed for
+    a delivery that never took effect."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    raw = json.dumps([{"identifier": "arr-1"}]).encode()
+    client.post(
+        "/api/pdax/webhooks/receive",
+        content=raw,
+        headers={"content-type": "application/json", "x-pdax-signature": _sign("s3cret", raw)},
+    )
+    assert pw._seen_events == {}
 
 
 def test_failed_handling_releases_claim_so_retry_succeeds(client, monkeypatch):

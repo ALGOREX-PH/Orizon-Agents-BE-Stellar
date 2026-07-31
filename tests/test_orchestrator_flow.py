@@ -29,6 +29,10 @@ def test_kit_execute_produces_baked_artifact(client):
     assert artifact is not None, "artifact never arrived"
     assert artifact["preview_html"]
     assert len(artifact["preview_html"]) > 10_000
+    # Every artifact the API hands back carries the containment policy, so the
+    # iframe cannot be talked into egress even if generation was steered.
+    assert "connect-src 'none'" in artifact["preview_html"]
+    assert "Content-Security-Policy" in artifact["files"][0]["content"]
 
 
 def test_decompose_rejects_short_intent(client):

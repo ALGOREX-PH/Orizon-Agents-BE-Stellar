@@ -17,7 +17,7 @@ from typing import Any
 
 from .base import Worker
 from .code_critic import CodeCritic
-from .code_validator import validate_html
+from .code_validator import harden_artifact, validate_html
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ class CodeCriticWorker(Worker):
             await asyncio.sleep(0.4 + random.random() * 0.6)
             title = draft_artifact.get("title", "artifact")
             kit_id = (ctx.get("kit") or {}).get("kit_id", "kit")
+            draft_artifact = harden_artifact(draft_artifact)
             return {
                 "summary": (
                     f"{title} · verified · {len(validator_violations)} structural "
@@ -137,6 +138,11 @@ class CodeCriticWorker(Worker):
 
         title = final_artifact.get("title", "artifact")
         summary = title + " · " + (critic_notes[0] if critic_notes else "no changes")
+
+        # The critic rewrote the whole document and may well have dropped the
+        # policy meta on the way through — re-apply it before the artifact
+        # leaves the pipeline. harden_artifact() is idempotent.
+        final_artifact = harden_artifact(final_artifact)
 
         return {
             "summary": summary,

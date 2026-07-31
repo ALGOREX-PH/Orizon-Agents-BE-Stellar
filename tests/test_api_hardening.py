@@ -36,6 +36,9 @@ _CONTRACT_ID_FIELDS = (
 def _configure_stellar(monkeypatch) -> None:
     for field in _CONTRACT_ID_FIELDS:
         monkeypatch.setattr(settings, field, "C" + "A" * 55)
+    # Reads need a source account as much as they need contract ids, so a
+    # fully-configured Stellar setup includes the admin address.
+    monkeypatch.setattr(settings, "stellar_admin_address", VALID_G)
 
 
 def test_readiness_ready_without_signing_key(client, monkeypatch):
@@ -77,6 +80,19 @@ def test_readiness_503_when_stellar_incomplete(client, monkeypatch):
     assert body["stellar"] == "incomplete"
 
 
+def test_readiness_503_when_admin_address_missing(client, monkeypatch):
+    """Without STELLAR_ADMIN_ADDRESS every simulate_read raises outright
+    ("no source address"), so the probe must not report a healthy Stellar."""
+    _configure_stellar(monkeypatch)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "stellar_admin_address", "")
+    r = client.get("/readiness")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["stellar"] == "incomplete"
+
+
 def test_readiness_reports_configured_signer_and_pdax(client, monkeypatch):
     _configure_stellar(monkeypatch)
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
@@ -86,6 +102,33 @@ def test_readiness_reports_configured_signer_and_pdax(client, monkeypatch):
     body = client.get("/readiness").json()
     assert body["signer"] == "configured"
     assert body["pdax"] == "configured"
+
+
+def test_attestation_path_rejects_out_of_bounds_job_id(client):
+    """The job_id path param is bounded at the router edge, so oversized or
+    non-hex ids are a 422 — no RPC round-trip, no stack trace."""
+    for job_id in (
+        "ab" * 512,  # far past 16 bytes
+        "abc",  # too short
+        "zz" * 16,  # right length, not hex
+        "../../etc/passwd",
+    ):
+        r = client.get(f"/api/stellar/attestation/{job_id}")
+        assert r.status_code in (404, 422), (job_id, r.status_code)
+
+
+def test_attestation_path_accepts_a_well_formed_job_id(client, monkeypatch):
+    """The bound rejects garbage without rejecting real ids: a valid one gets
+    past validation and reaches the (here stubbed-offline) RPC layer."""
+    from app.stellar import client as sc
+
+    def _offline(*_args, **_kwargs):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "simulate_read", _offline)
+    r = client.get(f"/api/stellar/attestation/{'ab' * 16}")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "attestation_read_failed"
 
 
 def test_charge_rejects_negative_amount(client):
@@ -206,6 +249,39 @@ def test_cors_allows_project_preview_origins(client):
         )
         assert r.status_code == 200
         assert r.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_preflight_allows_task_token_header(client):
+    """The frontend sends X-Task-Token for per-task reads; a cross-origin
+    caller must get it back from the preflight or the request never fires."""
+    origin = "https://orizon-agents-fe-stellar.vercel.app"
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-task-token",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == origin
+    allowed = {h.strip().lower() for h in r.headers["access-control-allow-headers"].split(",")}
+    assert "x-task-token" in allowed
+    # The headers already relied on stay allowed.
+    assert {"content-type", "authorization", "x-api-key"} <= allowed
+
+
+def test_cors_preflight_rejects_unknown_header(client):
+    """Guard against the allow-list quietly becoming a wildcard."""
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": "https://orizon-agents-fe-stellar.vercel.app",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-not-a-real-header",
+        },
+    )
+    assert r.status_code == 400
 
 
 def test_cors_rejects_foreign_vercel_origins(client):

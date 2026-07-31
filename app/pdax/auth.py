@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from ..config import settings
 from .errors import PdaxError
@@ -107,9 +108,12 @@ class PdaxAuth:
         body = {"username": settings.pdax_username, "password": settings.pdax_password}
         data = await _post(http, _LOGIN, body)
         if data.get("challenge_name"):  # MFA challenge — answer with a TOTP code
-            await self._answer_mfa(http, data["session"])
+            session = data.get("session")
+            if not isinstance(session, str) or not session:
+                raise PdaxError("PDAX MFA challenge carried no session", code="InvalidMfaCode")
+            await self._answer_mfa(http, session)
             return
-        self._store(TokenSet(**data))
+        self._store(_token_set(data))
 
     async def _answer_mfa(self, http: httpx.AsyncClient, session: str) -> None:
         if not settings.pdax_otp_secret:
@@ -120,7 +124,7 @@ class PdaxAuth:
         otp = totp_now(settings.pdax_otp_secret, timestamp=int(time.time()))
         body = {"session": session, "username": settings.pdax_username, "otp": otp}
         data = await _post(http, _OTP, body)
-        self._store(TokenSet(**data))
+        self._store(_token_set(data))
 
     async def _refresh(self, http: httpx.AsyncClient) -> None:
         assert self._tokens is not None
@@ -129,7 +133,17 @@ class PdaxAuth:
             "refreshToken": self._tokens.refresh_token,
         }
         data = await _put(http, _REFRESH, body)
-        self._store(TokenSet(**data))
+        self._store(_token_set(data))
+
+
+def _token_set(data: dict[str, Any]) -> TokenSet:
+    """A 2xx body that isn't a token set is an upstream failure too — fold it
+    into PdaxError so it retries/maps like every other malformed shape rather
+    than escaping as a 500."""
+    try:
+        return TokenSet(**data)
+    except ValidationError as e:
+        raise PdaxError("malformed PDAX auth response", code="bad_upstream_shape") from e
 
 
 async def _post(http: httpx.AsyncClient, path: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -140,24 +154,41 @@ async def _put(http: httpx.AsyncClient, path: str, body: dict[str, Any]) -> dict
     return await _send(http, "PUT", path, body)
 
 
-async def _send(http: httpx.AsyncClient, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
-    try:
-        resp = await http.request(method, path, json=body, headers={"Content-Type": "application/json"})
-    except httpx.HTTPError as e:  # network/transport failure
-        raise PdaxError(f"PDAX auth transport error: {e}") from e
-    data = resp.json() if resp.content else {}
-    if resp.status_code >= 400 or data.get("code") in {
+_AUTH_ERROR_CODES = frozenset(
+    {
         "InvalidCredentials",
         "InvalidMfaCode",
         "NotAuthorizedException",
         "BadRequestException",
         "AccountLocked",
         "ExpiredTemporaryPassword",
-    }:
+    }
+)
+
+
+async def _send(http: httpx.AsyncClient, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        resp = await http.request(method, path, json=body, headers={"Content-Type": "application/json"})
+    except httpx.HTTPError as e:  # network/transport failure
+        raise PdaxError(f"PDAX auth transport error: {e}") from e
+    # Mirrors client._parse: PDAX is fronted by a gateway/WAF that answers with
+    # an HTML error page on a bad day, and `resp.json()` raises ValueError on
+    # it. An un-typed exception here escapes with_retries and every route's
+    # `except PdaxError`, so a Cloudflare 502 would surface as "500
+    # internal_error" — an app bug, not the upstream outage it is.
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {"message": resp.text}
+    # A JSON array body is valid JSON but has no .get — same treatment.
+    envelope = data if isinstance(data, dict) else {}
+    if resp.status_code >= 400 or envelope.get("code") in _AUTH_ERROR_CODES:
         raise PdaxError(
-            data.get("message", "PDAX authentication failed"),
-            code=data.get("code"),
+            envelope.get("message") or f"PDAX authentication failed ({resp.status_code})",
+            code=envelope.get("code"),
             http_status=resp.status_code,
             raw=data,
         )
+    if not isinstance(data, dict):
+        raise PdaxError("malformed PDAX auth response", code="bad_upstream_shape", http_status=resp.status_code)
     return data

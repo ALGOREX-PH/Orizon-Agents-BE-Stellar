@@ -69,6 +69,87 @@ def test_sweep_drops_expired_keys_past_threshold():
     assert "fresh" in cache._store
 
 
+def test_fresh_unique_keys_stay_bounded():
+    """The case expiry-only sweeping could not handle.
+
+    Cache keys are caller-influenced (`agent:{id}`, `repstate:{id}`,
+    `attestation:{hex}` — unbounded distinct values), so a stream of unique
+    keys that are ALL still fresh is reachable. Sweeping only expired entries
+    freed nothing here: both dicts grew without bound and every later miss
+    paid an O(n) scan that reclaimed nothing.
+    """
+    producer, _ = _counting_producer()
+
+    async def run():
+        for i in range(cache._MAX_ENTRIES * 3):
+            await cache.get_or_set(f"fresh{i}", 60.0, producer)
+
+    asyncio.run(run())
+    assert len(cache._store) <= cache._MAX_ENTRIES + 1
+    # Eviction is by expiry, and equal TTLs make that insertion order: the
+    # newest writes survive and the oldest are gone.
+    assert f"fresh{cache._MAX_ENTRIES * 3 - 1}" in cache._store
+    assert "fresh0" not in cache._store
+
+
+def test_eviction_drops_the_entries_closest_to_expiry_first():
+    producer, _ = _counting_producer()
+
+    async def run():
+        # Written first, but with far more life left than anything that
+        # follows — remaining TTL, not age, decides who goes.
+        await cache.get_or_set("keep", 3600.0, producer)
+        for i in range(cache._MAX_ENTRIES + 128):
+            await cache.get_or_set(f"short{i}", 5.0, producer)
+
+    asyncio.run(run())
+    assert len(cache._store) <= cache._MAX_ENTRIES + 1
+    assert "keep" in cache._store
+
+
+def test_fresh_entries_and_failures_are_capped_together():
+    """The cap is on the combined size: neither dict can be starved into
+    unboundedness by the other filling up with fresh entries."""
+    producer, _ = _counting_producer()
+
+    async def failing():
+        raise RuntimeError("rpc down")
+
+    async def run():
+        for i in range(cache._MAX_ENTRIES):
+            await cache.get_or_set(f"fresh{i}", 60.0, producer)
+        for i in range(cache._MAX_ENTRIES):
+            with pytest.raises(RuntimeError):
+                await cache.get_or_set(f"bad{i}", 60.0, failing)
+
+    asyncio.run(run())
+    assert len(cache._store) + len(cache._failures) <= cache._MAX_ENTRIES + 1
+
+
+def test_sweep_runs_rarely_once_the_cache_is_full(monkeypatch):
+    """Evicting to a low-water mark instead of exactly to the cap keeps the
+    ordering pass off the hot path — otherwise every single miss past the
+    threshold would pay for one, trading a memory leak for a CPU cliff."""
+    producer, _ = _counting_producer()
+    sweeps = {"n": 0}
+    real_sweep = cache._sweep
+
+    def counting_sweep(now: float) -> None:
+        sweeps["n"] += 1
+        real_sweep(now)
+
+    monkeypatch.setattr(cache, "_sweep", counting_sweep)
+    admissions = cache._MAX_ENTRIES * 2
+
+    async def run():
+        for i in range(admissions):
+            await cache.get_or_set(f"fresh{i}", 60.0, producer)
+
+    asyncio.run(run())
+    # One sweep per _EVICT_HEADROOM admissions, not one per miss.
+    assert sweeps["n"] <= admissions // cache._EVICT_HEADROOM + 2
+
+
 def test_concurrent_misses_share_one_producer_call():
     producer, calls = _counting_producer(delay=0.05)
 

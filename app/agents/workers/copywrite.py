@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ...config import settings
 from ..model_factory import build_openai_chat
 from .base import Worker
+from .prompt_safety import worker_prompt
 
 
 class Section(BaseModel):
@@ -44,7 +45,7 @@ class Copywrite(Worker):
         rationale: str,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        prompt = f"INTENT: {intent}\nRATIONALE: {rationale}\n\nDraft the copy."
+        prompt = worker_prompt(intent, rationale, "Draft the copy.")
         result = await self._agent.arun(prompt)
         out: CopyOutput = result.content  # type: ignore[assignment]
         return {

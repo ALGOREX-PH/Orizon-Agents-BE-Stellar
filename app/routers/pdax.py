@@ -374,6 +374,12 @@ async def webhook_receive(request: Request) -> dict:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(400, detail="invalid webhook payload") from e
+    if not isinstance(payload, dict):
+        # Valid JSON, wrong shape: a signed array (or scalar) body reaches
+        # event_key/parse_event, which index it by key. That is malformed
+        # input, not a server fault — 400, never the AttributeError 500 it
+        # used to raise before the claim was even taken.
+        raise HTTPException(400, detail="invalid webhook payload")
     # Idempotency — a retried delivery must not advance a ramp twice.
     key = pw.event_key(payload)
     if not pw.claim_event(key):
@@ -392,8 +398,17 @@ async def webhook_receive(request: Request) -> dict:
     except BaseException:
         pw.release_event(key)
         raise
+    # An event that matched no ramp is still answered 200, deliberately. PDAX
+    # redelivers on non-2xx, but ramp state is process-local (see ramp_store):
+    # an event unmatched now is unmatched on every retry too, so a 5xx would
+    # buy a guaranteed retry storm and still deliver nothing. Instead the miss
+    # is logged at warning by ramp._match ("unmatched settlement event") and
+    # reported here as matched=false, so recovery is an operator action
+    # (reconcile, or a manual payout) rather than an upstream retry. Durable
+    # ramp storage is the real fix; until then 200 is the honest answer.
     return {
         "received": True,
+        "matched": advanced is not None,
         "event": event.model_dump(),
         "ramp": advanced.model_dump() if advanced else None,
     }

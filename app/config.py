@@ -3,6 +3,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015"
 
+# Advertised service version — the FastAPI app's `version` and the liveness
+# payload both read it here so the number they report can never disagree.
+SERVICE_VERSION = "0.1.0"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -32,8 +36,10 @@ class Settings(BaseSettings):
     docs_enabled: bool = True
 
     # ── Hardening ─────────────────────────────────────────────
-    # Optional shared secret for the backend-signing routes. Empty (the
-    # demo default) disables the check; set it to require X-API-Key.
+    # Shared secret for the money-moving routes. Empty (the demo default)
+    # disables the check; set it to require X-API-Key. It stops being
+    # optional the moment the process holds credentials that can move real
+    # value — see _money_capable_config_requires_api_key below.
     api_key: str = ""
     # Capability-token authorization for task-scoped reads. OFF by default —
     # the public demo stays fully open. When enabled, GET task/trace routes
@@ -150,6 +156,51 @@ class Settings(BaseSettings):
                     "is production — without it inbound webhooks cannot be "
                     "verified. Set the shared secret from the PDAX console."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _money_capable_config_requires_api_key(self) -> "Settings":
+        """Fail fast when the money-moving routes would answer anonymously.
+
+        `require_api_key` (app/security.py) is a deliberate no-op while
+        api_key is empty — the public demo runs open — and that is only safe
+        while nothing behind it can move real value. Once the process holds
+        credentials that CAN, an empty API_KEY leaves the entire secured PDAX
+        router (/api/pdax/ramp/{onramp,offramp}, /fiat/withdraw,
+        /crypto/withdraw, /trade/order, /balances) plus
+        /api/stellar/server/charge and /server/seal callable by anyone on the
+        internet, with the backend signing on their behalf.
+
+        "Can move real value" is scoped narrowly on purpose, so local dev and
+        CI keep booting: a signing key on mainnet, or PDAX credentials in the
+        production environment. Testnet signers and uat/stage PDAX move play
+        money and stay open, as does a read-only mainnet deployment.
+
+        Refusing to boot — rather than reporting not-ready — is both the
+        safer option and the one consistent with the validators above.
+        Failing /readiness would not actually close the hole: render.yaml
+        points healthCheckPath at /health, so a not-ready answer never stops
+        Render from routing traffic, and the process would keep serving the
+        anonymous withdrawal routes it was supposed to be protecting. A
+        refused boot fails the deploy loudly and cannot be missed.
+        """
+        if self.api_key:
+            return self
+        exposures: list[str] = []
+        if self.stellar_network.lower() in {"mainnet", "public"} and self.stellar_signing_key:
+            exposures.append(
+                "STELLAR_SIGNING_KEY is set on mainnet, so /api/stellar/server/charge "
+                "and /server/seal sign real transactions"
+            )
+        if self.pdax_environment.strip().lower() == "production" and self.pdax_username and self.pdax_password:
+            exposures.append("production PDAX credentials are set, so /api/pdax/* can move real fiat")
+        if exposures:
+            raise ValueError(
+                "API_KEY is required because " + "; and ".join(exposures) + ". Without it every "
+                "money-moving route is anonymous. Set API_KEY (in the Render dashboard for the "
+                "deployed service) and send it as the X-API-Key header, or remove the "
+                "credentials above to run a read-only/demo deployment."
+            )
         return self
 
     @property

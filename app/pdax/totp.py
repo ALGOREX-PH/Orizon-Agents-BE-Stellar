@@ -8,15 +8,24 @@ Used to answer a PDAX SOFTWARE_TOKEN_MFA challenge automatically when
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import struct
+
+from .errors import PdaxError
 
 
 def totp_now(secret_base32: str, *, timestamp: int, period: int = 30, digits: int = 6) -> str:
     """Compute the TOTP code for `timestamp` (seconds). Caller passes the time
     explicitly so the value is deterministic and testable."""
-    key = base64.b32decode(_pad(secret_base32.strip().replace(" ", "").upper()))
+    try:
+        key = base64.b32decode(_pad(secret_base32.strip().replace(" ", "").upper()))
+    except (binascii.Error, ValueError) as e:
+        # A mistyped PDAX_OTP_SECRET must not surface as a 500 on the first
+        # MFA login: it is a failed PDAX authentication like any other, and
+        # the routers only translate PdaxError.
+        raise PdaxError("PDAX_OTP_SECRET is not valid base32", code="InvalidMfaCode") from e
     counter = int(timestamp // period)
     msg = struct.pack(">Q", counter)
     digest = hmac.new(key, msg, hashlib.sha1).digest()

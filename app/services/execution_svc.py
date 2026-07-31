@@ -16,6 +16,10 @@ from ..trace_bus import bus
 
 logger = logging.getLogger(__name__)
 
+# Per-step ceiling — gpt-5.3-codex producing a 600–1000 line artifact can
+# legitimately take 30–90s. Enough headroom, still bounded.
+STEP_TIMEOUT_SECONDS = 120.0
+
 # Strong references to in-flight background runs — asyncio.create_task alone
 # only keeps a weak reference, so an un-referenced task can be garbage
 # collected mid-run. Tasks remove themselves on completion.
@@ -96,7 +100,7 @@ async def execute_plan(
         agents=len(plan.plan.steps),
         spent=0.0,
         status="running",
-        started="just now",
+        # started_at defaults to now; `started` is derived from it per response.
     )
     state.add_task(task)
     state.task_tokens[task_id] = read_token
@@ -114,6 +118,7 @@ async def _run(
 ) -> None:
     start = time.monotonic()
     spent = 0.0
+    succeeded = 0  # steps that returned output; drives the terminal status
     last_artifact: dict | None = None
     charge_tx: str | None = None
     proof_tx: str | None = None
@@ -154,6 +159,10 @@ async def _run(
         for step in plan.plan.steps:
             worker = get_worker(step.agent_id)
             if worker is None:
+                # Trace lines only reach the SSE viewer and are dropped with the
+                # task; every step failure also goes to the server log so an
+                # outage is diagnosable after the fact.
+                logger.error("task %s step %s: unknown agent — step skipped", task_id, step.agent_id)
                 await _emit(task_id, start, "error", f"unknown agent: {step.agent_id}")
                 continue
 
@@ -165,19 +174,36 @@ async def _run(
             )
 
             try:
-                # 120s ceiling — gpt-5.3-codex producing a 600–1000 line artifact
-                # can legitimately take 30–90s. Enough headroom, still bounded.
                 output = await asyncio.wait_for(
                     worker.run(plan.intent, step.rationale, context=context),
-                    timeout=120.0,
+                    timeout=STEP_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                logger.error(
+                    "task %s step %s (%s): timed out after %.0fs",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    STEP_TIMEOUT_SECONDS,
+                )
                 await _emit(task_id, start, "error", f"{worker.name} timed out")
                 continue
-            except Exception as e:  # pragma: no cover
+            except Exception as e:
+                # exc_info: a revoked key / exhausted quota surfaces as a
+                # provider exception several frames down — the traceback is the
+                # only way to tell those apart without a debugger.
+                logger.error(
+                    "task %s step %s (%s): failed: %s",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    e,
+                    exc_info=True,
+                )
                 await _emit(task_id, start, "error", f"{worker.name} failed: {e}")
                 continue
 
+            succeeded += 1
             spent += step.est_price_usdc
             if not onchain:
                 await _emit(
@@ -230,23 +256,44 @@ async def _run(
             if isinstance(output, dict):
                 context[worker.name] = output
 
+        total_steps = len(plan.plan.steps)
+        status = _terminal_status(total_steps, succeeded, last_artifact)
+
         if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
             charge_tx, proof_tx, job_id = await _settle_onchain(
                 task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
             )
             if charge_tx and job_id:
                 await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
-        else:
+        elif status == "complete":
+            # Only a run that actually delivered gets a (simulated) seal — a
+            # workflow that produced nothing has nothing to attest to.
             sim_hash = "0x" + secrets.token_hex(16)
             await _emit(task_id, start, "proof", f"ERC-8004 attestation: {sim_hash} (simulated)")
             await _emit(
                 task_id,
                 start,
                 "proof",
-                f"workflow sealed — {len(plan.plan.steps)} agents · {spent:.3f} USDC · {time.monotonic() - start:.2f}s",
+                f"workflow sealed — {total_steps} agents · {spent:.3f} USDC · {time.monotonic() - start:.2f}s",
             )
 
-        _finalize_task(task_id, "complete", spent, last_artifact, charge_tx, proof_tx)
+        if status != "complete":
+            logger.error(
+                "task %s finalized as %s: %d/%d steps produced output, artifact=%s",
+                task_id,
+                status,
+                succeeded,
+                total_steps,
+                last_artifact is not None,
+            )
+            await _emit(
+                task_id,
+                start,
+                "error",
+                f"workflow incomplete — {succeeded}/{total_steps} agents produced output",
+            )
+
+        _finalize_task(task_id, status, spent, last_artifact, charge_tx, proof_tx)
 
     except asyncio.CancelledError:
         # Shutdown or external cancel: leave the task terminal instead of
@@ -265,6 +312,38 @@ async def _run(
         # (a bare `await asyncio.sleep` here would swallow the close when a
         # CancelledError landed on it).
         await asyncio.shield(_finish_stream(task_id))
+
+
+def _terminal_status(total_steps: int, succeeded: int, artifact: dict | None) -> TaskStatus:
+    """Terminal status for a run that reached the end of its plan.
+
+    Every per-step failure is swallowed (`continue`) so one bad agent can't sink
+    the whole workflow — which means reaching the end of the loop says nothing
+    about what was produced. The rule:
+
+      • all steps produced output → "complete". A zero-step plan is vacuously
+        complete: nothing was asked of the network, so nothing failed.
+      • no step produced output → "failed". This is the total-outage case (key
+        revoked, quota exhausted, provider down): every step raises, the loop
+        continues past all of them, and the caller gets spent=0 and no artifact.
+        Calling that "complete" hands out an empty result and inflates
+        /api/metrics/overview's avg_completion, which is a rate over exactly the
+        two terminal statuses.
+      • partial (some produced output, some failed) → judged on the deliverable:
+        "complete" when an artifact survived, because the caller still receives
+        the thing they asked for, merely degraded (e.g. code.gen drafted and
+        code.critic then failed to polish); "failed" when it did not, because a
+        half-run workflow with nothing to hand back is not a success.
+
+    Only "complete" and "failed" are used: TaskStatus is a closed union the
+    frontend renders as a status badge, so a partial run must land on one side
+    of it rather than inventing a third terminal value.
+    """
+    if succeeded >= total_steps:
+        return "complete"
+    if succeeded == 0:
+        return "failed"
+    return "complete" if artifact else "failed"
 
 
 def _finalize_task(
@@ -309,6 +388,12 @@ async def _settle_onchain(
 
     Returns (charge_tx, proof_tx, job_id); either tx may be None if that step
     failed, and job_id is None when the charge failed or was skipped.
+
+    Every failure here is money-affecting (a charge that never landed, or a
+    charge that landed with no attestation sealed against it), so each one is
+    logged as well as traced: trace lines live in state.traces, which is evicted
+    after 200 tasks and lost on every restart. The log carries the task, auth,
+    payer and amount — never the signing key or raw signed XDR.
     """
     from stellar_sdk import scval as _sv
 
@@ -319,6 +404,14 @@ async def _settle_onchain(
     settled_job_id: bytes | None = None
 
     if not settings.stellar_signing_key:
+        logger.error(
+            "task %s: STELLAR_SIGNING_KEY not set — skipping on-chain charge/seal "
+            "(auth %s, payer %s, %.6f USDC unbilled)",
+            task_id,
+            auth_id_hex,
+            payer,
+            total_usdc,
+        )
         await _emit(
             task_id,
             start,
@@ -355,6 +448,17 @@ async def _settle_onchain(
                 f"x402 charge → {total_usdc:.3f} USDC settled · tx {charge_tx[:10]}…",
             )
         else:
+            logger.error(
+                "task %s: PaymentEscrow.charge did not settle — status=%s hash=%s "
+                "(auth %s, payer %s, %.6f USDC, job %s)",
+                task_id,
+                charge.get("status"),
+                charge_tx,
+                auth_id_hex,
+                payer,
+                total_usdc,
+                job_id.hex(),
+            )
             await _emit(
                 task_id,
                 start,
@@ -403,6 +507,20 @@ async def _settle_onchain(
                 f"{time.monotonic() - start:.2f}s",
             )
         else:
+            # The charge already settled, so this leaves paid work unattested —
+            # the one state that has to be reconstructable from the logs.
+            logger.error(
+                "task %s: AttestationRegistry.seal did not settle — status=%s hash=%s "
+                "(job %s charged %.6f USDC via tx %s, auth %s, payer %s)",
+                task_id,
+                seal.get("status"),
+                proof_tx,
+                job_id.hex(),
+                total_usdc,
+                charge_tx,
+                auth_id_hex,
+                payer,
+            )
             await _emit(
                 task_id,
                 start,
@@ -410,6 +528,17 @@ async def _settle_onchain(
                 f"seal status={seal.get('status')} hash={proof_tx}",
             )
     except Exception as e:
+        logger.error(
+            "task %s: on-chain settlement failed: %s (auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
+            task_id,
+            e,
+            auth_id_hex,
+            payer,
+            total_usdc,
+            charge_tx,
+            proof_tx,
+            exc_info=True,
+        )
         await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
 
     return (charge_tx, proof_tx, settled_job_id)
@@ -426,8 +555,10 @@ async def _submit_ratings(
 ) -> None:
     """Submit the settler's synthetic per-step ratings to ReputationLedger.
 
-    Best-effort by design: a failed rating never fails the workflow — each
-    step logs its own trace line and the loop moves on.
+    Best-effort by design: a failed rating never fails the workflow — each step
+    traces and logs its own failure and the loop moves on. It is logged as well
+    as traced because a rating that silently never landed skews the on-chain
+    reputation the planner reads, and traces do not survive a restart.
     """
     if not (settings.reputation_enabled and settings.stellar_reputation_ledger and settings.stellar_signing_key):
         return
@@ -459,6 +590,18 @@ async def _submit_ratings(
                 f"reputation → {step.agent_name} rated {rating}/100 · tx {tx[:10]}…",
             )
         except Exception as e:
+            logger.error(
+                "task %s: reputation submit failed for %s (%s): %s (job %s, rating %d, weight %d, payer %s)",
+                task_id,
+                step.agent_name,
+                step.agent_id,
+                e,
+                job_id.hex(),
+                rating,
+                weight,
+                payer,
+                exc_info=True,
+            )
             await _emit(
                 task_id,
                 start,

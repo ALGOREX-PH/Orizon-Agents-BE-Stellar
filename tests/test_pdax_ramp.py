@@ -5,6 +5,7 @@ advance step finishes (success or failure)."""
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -378,7 +379,10 @@ def test_malformed_quote_fields_fail_ramp_cleanly():
     asyncio.run(run())
 
 
-def test_unmatched_event_is_ignored():
+def test_unmatched_event_is_warned_not_silently_dropped(caplog):
+    """A completed deposit matching no ramp means money arrived that nothing
+    will act on — the process may simply have restarted since the ramp was
+    created. It advances nothing, but it must never be silent."""
     client = _onramp_client()
 
     async def run():
@@ -389,10 +393,60 @@ def test_unmatched_event_is_ignored():
             transaction_type="DEPOSIT",
             status="COMPLETED",
         )
-        assert await ramp.handle_event(client, event) is None
+        with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+            assert await ramp.handle_event(client, event) is None
         assert client.calls == []
 
     asyncio.run(run())
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "unmatched settlement event" in m and "identifier=unknown-id" in m and "amount=1.0" in m and "type=DEPOSIT" in m
+        for m in warnings
+    ), warnings
+
+
+def test_unmatched_crypto_deposit_warns_with_destination(caplog):
+    client = _offramp_client()
+    event = CryptoEvent(
+        user_id="u1",
+        transaction_type="DEPOSIT",
+        amount=10.0,
+        asset="USDCXLM",
+        destination_address="GNOBODY",
+        status="completed",
+    )
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        assert asyncio.run(ramp.handle_event(client, event)) is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("unmatched settlement event" in m and "target=GNOBODY" in m for m in warnings), warnings
+
+
+def test_events_we_never_act_on_stay_quiet(caplog):
+    """Withdrawals and non-final statuses are not unclaimed money — they must
+    not add noise the unmatched warning then has to stand out in."""
+    client = _onramp_client()
+    withdrawal = FiatEvent(
+        identifier="unknown-id",
+        user_id="u1",
+        amount=1.0,
+        transaction_type="WITHDRAWAL",
+        status="COMPLETED",
+    )
+    pending = FiatEvent(
+        identifier="unknown-id",
+        user_id="u1",
+        amount=1.0,
+        transaction_type="DEPOSIT",
+        status="IN-PROGRESS",
+    )
+
+    async def run():
+        assert await ramp.handle_event(client, withdrawal) is None
+        assert await ramp.handle_event(client, pending) is None
+
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        asyncio.run(run())
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
 def test_advance_offramp_without_payout_fails_cleanly():

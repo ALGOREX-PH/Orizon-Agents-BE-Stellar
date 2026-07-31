@@ -13,11 +13,14 @@ restarts and can be reconciled against PDAX webhooks.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 
 from .models.ramp import RampRecord, RampStage
+
+logger = logging.getLogger(__name__)
 
 # Retention cap for tracked ramps (insertion-ordered eviction, see save()).
 _MAX_RAMPS = 500
@@ -59,8 +62,19 @@ def _evict_one() -> None:
         (rid for rid, r in _ramps.items() if r.status in _TERMINAL),
         next(iter(_ramps)),
     )
-    _ramps.pop(victim, None)
+    evicted = _ramps.pop(victim, None)
     _locks.pop(victim, None)
+    if evicted is not None and evicted.status not in _TERMINAL:
+        # An in-flight ramp is disappearing to make room: it can never be
+        # advanced or reconciled again, so say so rather than losing it
+        # silently.
+        logger.warning(
+            "evicted in-flight ramp: ramp_id=%s direction=%s status=%s identifier=%s",
+            victim,
+            evicted.direction,
+            evicted.status,
+            evicted.identifier,
+        )
     # Late import (ramp imports this module) — an evicted in-flight off-ramp
     # must not leave its payout PII stranded in the stash.
     from . import ramp
@@ -84,4 +98,19 @@ def find_by_identifier(identifier: str) -> RampRecord | None:
 
 
 def add_stage(record: RampRecord, name: str, status: str, detail: str = "") -> None:
+    """Append a lifecycle stage and mirror it to the log.
+
+    Records live in RAM only, so the log is the sole trace of a ramp once the
+    process restarts — every transition is emitted here so a ramp's lifecycle
+    stays reconstructable. `detail` carries ids, amounts, and error codes;
+    callers must never pass beneficiary names or account numbers.
+    """
     record.stages.append(RampStage(name=name, status=status, detail=detail))
+    logger.info(
+        "ramp stage: ramp_id=%s direction=%s stage=%s status=%s detail=%s",
+        record.ramp_id,
+        record.direction,
+        name,
+        status,
+        detail,
+    )

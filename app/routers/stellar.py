@@ -131,6 +131,11 @@ async def network() -> NetworkInfo:
 # garbage at the router edge instead of paying an RPC round-trip to find out.
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_]{1,32}$"
 
+# Job/auth ids are 16-byte BytesN rendered hex — exactly 32 hex chars. Same
+# reasoning as AGENT_ID_PATTERN: bound the path param at the router edge so a
+# malformed id is a 422 with no RPC round-trip and no stack trace.
+JOB_ID_HEX_PATTERN = r"^[0-9a-fA-F]{32}$"
+
 
 # ── reads ───────────────────────────────────────────────────────
 @router.get("/agent/{agent_id}", response_model=AgentRead)
@@ -204,12 +209,12 @@ async def read_reputation(
 
 
 @router.get("/attestation/{job_id_hex}", response_model=AttestationRead)
-async def read_attestation(job_id_hex: str) -> AttestationRead:
+async def read_attestation(job_id_hex: str = Path(..., pattern=JOB_ID_HEX_PATTERN)) -> AttestationRead:
     """Read an on-chain Attestation by hex-encoded 16-byte job_id."""
     try:
+        # The path pattern already guarantees 32 hex chars, so this decode
+        # cannot fail and always yields exactly 16 bytes.
         jid = bytes.fromhex(job_id_hex)
-        if len(jid) != 16:
-            raise ValueError("job_id must be 32 hex chars (16 bytes)")
 
         async def _fetch() -> Any:
             return await asyncio.to_thread(
@@ -222,7 +227,10 @@ async def read_attestation(job_id_hex: str) -> AttestationRead:
         result = await rcache.get_or_set(f"attestation:{job_id_hex}", READ_TTL_SECONDS, _fetch)
         return AttestationRead(attestation=result)
     except Exception as e:
-        logger.exception("attestation read failed for %s", job_id_hex)
+        # Same reasoning as read_agent: an unsealed job id is a routine miss,
+        # not a stack-trace event — full tracebacks here bury the real errors.
+        # The RPC layer logs the underlying failure with its own timing.
+        logger.warning("attestation read failed for %s: %s", job_id_hex, e)
         raise HTTPException(400, "attestation_read_failed") from e
 
 
@@ -301,10 +309,14 @@ class SubmitReq(BaseModel):
 @router.post("/submit")
 async def submit_signed(req: SubmitReq) -> dict:
     """Submit a Freighter-signed transaction XDR."""
+    # Identify the transaction WITHOUT logging the envelope: signed XDR is
+    # signature material, so only the derived hash and source account — both
+    # public, both greppable against the explorer — go into the record.
+    tx_hash, source = sc.envelope_identity(req.signed_xdr)
     try:
         result = await sc.submit_signed_xdr_async(req.signed_xdr)
     except Exception as e:
-        logger.exception("signed xdr submit failed")
+        logger.exception("signed xdr submit failed · tx_hash=%s source=%s", tx_hash, source)
         raise HTTPException(400, "submit_failed") from e
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
@@ -344,7 +356,15 @@ async def server_charge(req: ChargeReq) -> dict:
             args,
         )
     except Exception as e:
-        logger.exception("server charge failed")
+        # A money-path stack trace has to be tie-able to the on-chain
+        # transaction it belongs to, or it is unusable during an incident.
+        # Ids and amount only — never the signing key or its derived secret.
+        logger.exception(
+            "server charge failed · auth_id=%s job_id=%s amount_usdc=%s",
+            req.auth_id_hex,
+            req.job_id_hex,
+            req.amount_usdc,
+        )
         raise HTTPException(400, "charge_failed") from e
 
 
@@ -393,7 +413,16 @@ async def server_seal(req: SealReq) -> dict:
             args,
         )
     except Exception as e:
-        logger.exception("server seal failed")
+        # Same rule as charge: enough to find the attestation on-chain
+        # (job id, the orchestrator paying for it, the sealed total), nothing
+        # that could reconstruct a key.
+        logger.exception(
+            "server seal failed · job_id=%s orchestrator=%s agents=%d total_spent_usdc=%s",
+            req.job_id_hex,
+            req.orchestrator,
+            len(req.agents),
+            req.total_spent_usdc,
+        )
         raise HTTPException(400, "seal_failed") from e
 
 

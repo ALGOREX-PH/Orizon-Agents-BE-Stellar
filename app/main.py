@@ -21,9 +21,15 @@ from fastapi.utils import is_body_allowed_for_status_code
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .config import settings
+from .config import SERVICE_VERSION, settings
 from .pdax.client import aclose_pdax_client
 from .routers import agents, flow, metrics, orchestrator, payments, pdax, stellar, tasks, trace
+
+# Imported by symbol, not as a module: the root `/health` handler defined
+# below rebinds the name `health` at module scope, which would shadow a
+# `from .routers import health` module import at call time.
+from .routers.health import HealthResponse, health_payload
+from .routers.health import router as health_router
 from .security import (
     BodyLimitMiddleware,
     RateLimitMiddleware,
@@ -33,7 +39,6 @@ from .security import (
 )
 from .seed import seed_registry
 from .services import execution_svc
-from .state import state
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -133,7 +138,7 @@ _docs_enabled = bool(getattr(settings, "docs_enabled", True))
 
 app = FastAPI(
     title="Orizon Agents API",
-    version="0.1.0",
+    version=SERVICE_VERSION,
     docs_url="/docs" if _docs_enabled else None,
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
@@ -194,9 +199,13 @@ app.add_middleware(
     allow_origin_regex=_CORS_ORIGIN_REGEX.pattern,
     # The API is token/header-based — no cookies — so credentials stay off,
     # and only the methods/headers the frontend actually sends are allowed.
+    # x-task-token is the per-task read capability (lib/api.ts): today the
+    # frontend proxies same-origin so no preflight happens, but the instant
+    # anything calls this API cross-origin with task auth on, its absence
+    # here is a hard preflight failure.
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["content-type", "authorization", "x-api-key"],
+    allow_headers=["content-type", "authorization", "x-api-key", "x-task-token"],
 )
 
 # Added last → runs outermost, so artifact/trace payloads (30–76 kB) leave the
@@ -320,6 +329,9 @@ app.include_router(flow.router, prefix="/api", responses=_ERROR_RESPONSES)
 app.include_router(payments.router, prefix="/api", responses=_ERROR_RESPONSES)
 app.include_router(stellar.router, prefix="/api", responses=_ERROR_RESPONSES)
 app.include_router(pdax.router, prefix="/api", responses=_ERROR_RESPONSES)
+# No _ERROR_RESPONSES: the probe takes no input and is exempt from the rate
+# limiter, so the 422/429 rows documented on the other routers cannot occur.
+app.include_router(health_router, prefix="/api")
 
 
 @app.get("/", tags=["meta"], summary="Service identity ping")
@@ -327,14 +339,12 @@ async def root() -> dict[str, str]:
     return {"service": "orizon-agents", "status": "online"}
 
 
-@app.get("/health", tags=["meta"], summary="Liveness probe")
-async def health() -> dict[str, Any]:
-    """Liveness probe — process is up and serving."""
-    return {
-        "status": "ok",
-        "version": app.version,
-        "uptime_seconds": round(time.time() - state.started_at, 1),
-    }
+@app.get("/health", tags=["meta"], summary="Liveness probe", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    """Liveness probe — process is up and serving. The body comes from the
+    shared `health_payload()`, so this route and the proxy-reachable
+    `/api/health` (routers/health.py) always answer identically."""
+    return health_payload()
 
 
 class ReadinessResponse(BaseModel):
@@ -367,7 +377,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         settings.stellar_attestation_registry,
         settings.stellar_asset_sac,
     )
-    stellar_ok = bool(settings.stellar_rpc_url) and all(contract_ids)
+    # The admin address is as load-bearing as the contract ids: every
+    # simulate_read needs a source account and raises outright without one
+    # (app/stellar/client.py), so a deploy missing STELLAR_ADMIN_ADDRESS has
+    # 100% of its contract reads failing — it must not report "ready".
+    stellar_ok = bool(settings.stellar_rpc_url) and bool(settings.stellar_admin_address) and all(contract_ids)
     # The reputation ledger only matters while reputation-gated routing is on.
     if settings.reputation_enabled and not settings.stellar_reputation_ledger:
         stellar_ok = False

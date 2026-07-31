@@ -35,8 +35,13 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-# Paths that must never be throttled (probes + root ping).
-EXEMPT_PATHS = frozenset({"/", "/health", "/readiness"})
+# Paths that must never be throttled (probes + root ping), and that stay out
+# of the access log. `/api/health` is the SAME liveness probe re-served under
+# the frontend proxy's `/api` prefix (routers/health.py): it must be exempt
+# identically, or an uptime monitor polling through the proxy would burn the
+# shared per-IP budget — every browser behind that egress IP pays for it —
+# and would flood the log with probe noise.
+EXEMPT_PATHS = frozenset({"/", "/health", "/readiness", "/api/health"})
 
 # Current request's id — set by RequestContextMiddleware, readable from any
 # code running in the request's task context (error handlers, log records).
