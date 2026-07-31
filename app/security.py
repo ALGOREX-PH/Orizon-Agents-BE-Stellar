@@ -17,7 +17,9 @@ Lightweight, dependency-free hardening primitives.
   bodies as the app reads them, answering 413 either way. Per-path
   overrides tighten the budget for routes that buffer the whole body.
 - `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
-  INFO access log per request (method, path, status, duration, id).
+  INFO access log per request (method, path, status, duration, id). Also
+  drives `ForwardedChainSampler`, a bounded once-per-process dump of the raw
+  proxy chain that exists so `TRUSTED_PROXY_HOPS` can be read off production.
 """
 
 from __future__ import annotations
@@ -150,6 +152,72 @@ def client_key(scope: dict, hops: int | None = None) -> str:
     return client[0] if client else "unknown"
 
 
+class ForwardedChainSampler:
+    """Log the first N forwarded chains a process sees, then go quiet.
+
+    `TRUSTED_PROXY_HOPS` can only be set correctly by someone who has SEEN a
+    real chain from this deployment's edge — Vercel's rewrite proxy and
+    Render's edge both rewrite X-Forwarded-For, and how many entries each
+    contributes is not observable from outside. This makes exactly that
+    visible, in Render's log stream, without becoming a new attack surface:
+
+    * **Not a route.** A diagnostic endpoint returning the chain would be an
+      unauthenticated disclosure of visitors' IP addresses on every deployment
+      whose API_KEY is empty (the public-demo default), and would stay
+      reachable long after the hop count was settled. Logs are already an
+      operator-only sink behind Render's dashboard auth, and already carry one
+      client address per request in the access line — this adds the rest of
+      the chain, for a handful of requests, to a stream that shape of data is
+      already in.
+    * **Not per request.** The budget is spent within the first few requests
+      after a deploy; from then on the cost is one integer comparison. That
+      matters on a 512 MB shared-CPU instance, and it keeps client addresses
+      from accumulating in the log for traffic that is not being diagnosed.
+    * **Not on the probe paths.** EXEMPT_PATHS requests come from Render's own
+      health checker and from uptime monitors, whose chains do not look like a
+      browser's; sampling them would burn the budget on unrepresentative data
+      before a real visitor ever arrives.
+
+    Re-arming needs no code change: every env var edit on Render restarts the
+    service, so setting FORWARDED_CHAIN_SAMPLES takes a fresh sample.
+    """
+
+    def __init__(self, budget: int | None = None) -> None:
+        self.reset(budget)
+
+    def reset(self, budget: int | None = None) -> None:
+        """Re-arm the sample. Production re-arms by restarting; tests call it."""
+        self.budget = max(0, settings.forwarded_chain_samples if budget is None else budget)
+        self.remaining = self.budget
+
+    def sample(self, scope: dict) -> None:
+        if self.remaining <= 0:
+            return
+        self.remaining -= 1
+        headers = dict(scope.get("headers") or [])
+        raw = (headers.get(b"x-forwarded-for") or b"").decode("latin-1")
+        chain = [entry.strip() for entry in raw.split(",") if entry.strip()]
+        peer = scope.get("client")
+        logger.info(
+            "forwarded chain sample %d/%d on %s %s: entries=%d chain=%s peer=%s "
+            "TRUSTED_PROXY_HOPS=%d resolves client=%s — set TRUSTED_PROXY_HOPS to the number of "
+            "TRAILING entries this edge appends, so the one to their left is the visitor",
+            self.budget - self.remaining,
+            self.budget,
+            scope.get("method", "-"),
+            scope.get("path", "-"),
+            len(chain),
+            chain,
+            peer[0] if peer else "-",
+            _trusted_hops(),
+            client_key(scope),
+        )
+
+
+# Armed at import, i.e. once per worker process.
+forwarded_chain_sampler = ForwardedChainSampler()
+
+
 async def require_api_key(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> None:
@@ -172,6 +240,11 @@ class RequestContextMiddleware:
     request — method, path, status, duration, id — so any response can be
     correlated with server logs. Probe paths (EXEMPT_PATHS) still get the
     header but are not logged, to keep the log free of health-check noise.
+
+    Being the outermost layer, this is also where the forwarded-chain sample
+    is taken (see ForwardedChainSampler): the sample line and the access line
+    for the same request carry the same request id, so the raw chain and the
+    key it resolved to can be read side by side.
     """
 
     def __init__(self, app: Any) -> None:
@@ -198,6 +271,16 @@ class RequestContextMiddleware:
 
         method = scope.get("method", "-")
         path = scope.get("path", "-")
+
+        # Bounded, once-per-process: the first few real requests after a
+        # restart print the raw forwarded chain so TRUSTED_PROXY_HOPS can be
+        # read off production instead of guessed. Sampled here, before the
+        # request is dispatched, so a 429 or a 500 is sampled too; probe paths
+        # are skipped so they cannot spend the budget on chains that do not
+        # look like a browser's.
+        if path not in EXEMPT_PATHS:
+            forwarded_chain_sampler.sample(scope)
+
         started = time.monotonic()
 
         async def send_with_context(message: dict) -> None:

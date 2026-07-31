@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # header). Only tune it against a chain actually observed from this edge —
     # see forwarded_chain_samples below and client_key()'s docstring.
     trusted_proxy_hops: int = 0
+    # Diagnostic budget for that tuning: log the raw X-Forwarded-For chain and
+    # the key it resolves to for the first N non-exempt requests after each
+    # process start, then stay silent for the life of the process. 0 disables
+    # it. Deliberately a bounded log sample rather than a diagnostic route —
+    # the chain carries visitors' IP addresses, and API_KEY is empty on demo
+    # deployments so a route could not be reliably gated. Changing any env var
+    # on Render redeploys the service, which re-arms the sample.
+    forwarded_chain_samples: int = 5
     # Ceiling on concurrently running workflows (each fans out LLM calls).
     # execute returns 503 "capacity_exhausted" once this many are in flight.
     orchestrator_max_concurrent: int = 8

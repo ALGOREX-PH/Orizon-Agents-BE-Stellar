@@ -11,6 +11,8 @@ degrades toward the safe side rather than toward a bypass.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
@@ -18,7 +20,12 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from app.config import settings
-from app.security import CHAIN_TOO_SHORT_KEY, RateLimitMiddleware, client_key
+from app.security import (
+    CHAIN_TOO_SHORT_KEY,
+    RateLimitMiddleware,
+    client_key,
+    forwarded_chain_sampler,
+)
 
 
 def _scope(forwarded: str | None = None, peer: str | None = "127.0.0.1") -> dict:
@@ -149,3 +156,111 @@ def test_untuned_default_leaves_one_shared_bucket(monkeypatch):
     edge = "76.76.21.9, 10.201.3.4"
     assert limited.get("/hit", headers={"X-Forwarded-For": f"1.1.1.1, 198.51.100.7, {edge}"}).status_code == 200
     assert limited.get("/hit", headers={"X-Forwarded-For": f"2.2.2.2, 198.51.100.99, {edge}"}).status_code == 429
+
+
+# ── the forwarded-chain sample ─────────────────────────────────────────
+# How the hop count above is meant to be determined: a bounded dump of the raw
+# chain into Render's log stream, rather than a diagnostic route that would
+# expose visitors' addresses to anyone.
+
+
+@pytest.fixture()
+def armed_sampler():
+    """Re-arm the process-wide sampler for one test and disarm it after, so
+    the budget cannot leak into (or be spent by) another test."""
+
+    def arm(budget: int) -> None:
+        forwarded_chain_sampler.reset(budget)
+
+    yield arm
+    forwarded_chain_sampler.reset(0)
+
+
+def _sample_lines(caplog) -> list[str]:
+    return [rec.getMessage() for rec in caplog.records if "forwarded chain sample" in rec.getMessage()]
+
+
+def test_sample_reports_the_raw_chain_and_the_resolved_key(client, armed_sampler, caplog):
+    armed_sampler(1)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        r = client.get("/api/agents", headers={"X-Forwarded-For": CHAIN})
+    assert r.status_code == 200
+
+    lines = _sample_lines(caplog)
+    assert len(lines) == 1
+    line = lines[0]
+    # Every entry of the chain, so the operator can COUNT the trailing hops.
+    for entry in CHAIN.split(", "):
+        assert entry in line
+    assert "entries=4" in line
+    # And what the current setting makes of it, so the two can be compared.
+    assert f"TRUSTED_PROXY_HOPS={settings.trusted_proxy_hops}" in line
+    assert "client=10.201.3.4" in line
+
+
+def test_sample_stops_after_the_budget(client, armed_sampler, caplog):
+    """Cheap by construction: a 512 MB shared-CPU instance must not pay for
+    this, and visitor addresses must not accumulate in the log."""
+    armed_sampler(2)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        for _ in range(5):
+            assert client.get("/api/agents", headers={"X-Forwarded-For": CHAIN}).status_code == 200
+
+    lines = _sample_lines(caplog)
+    assert len(lines) == 2
+    assert "sample 1/2" in lines[0]
+    assert "sample 2/2" in lines[1]
+
+
+def test_sampling_is_off_when_the_budget_is_zero(client, armed_sampler, caplog):
+    armed_sampler(0)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        assert client.get("/api/agents", headers={"X-Forwarded-For": CHAIN}).status_code == 200
+    assert _sample_lines(caplog) == []
+
+
+def test_probe_paths_never_spend_the_budget(client, armed_sampler, caplog):
+    """Render's health checker and uptime monitors reach the exempt paths from
+    a different chain than a browser does; letting them consume the sample
+    would answer the wrong question."""
+    armed_sampler(2)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        for path in ("/health", "/api/health", "/readiness", "/"):
+            client.get(path, headers={"X-Forwarded-For": CHAIN})
+        assert _sample_lines(caplog) == []
+        # The budget is intact for the first request that actually matters.
+        assert client.get("/api/agents", headers={"X-Forwarded-For": CHAIN}).status_code == 200
+    assert len(_sample_lines(caplog)) == 1
+
+
+def test_sample_is_correlated_with_the_access_line(client, armed_sampler, caplog):
+    """Both lines carry the same request id, so the raw chain and the key it
+    produced can be read together in Render's log viewer."""
+    armed_sampler(1)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        client.get("/api/agents", headers={"X-Forwarded-For": CHAIN, "X-Request-ID": "sample-rid-1"})
+
+    tagged = [rec for rec in caplog.records if getattr(rec, "request_id", "-") == "sample-rid-1"]
+    messages = [rec.getMessage() for rec in tagged]
+    assert any("forwarded chain sample" in m for m in messages)
+    assert any("GET /api/agents ->" in m for m in messages)
+
+
+def test_sample_is_taken_even_when_the_request_is_throttled(armed_sampler, caplog):
+    """The sample is taken before dispatch, so a service that is already 429ing
+    everyone — the failure mode that prompts the investigation — still reports
+    the chain that caused it."""
+    from app.security import RequestContextMiddleware
+
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[Route("/hit", ok)])
+    stack = TestClient(RequestContextMiddleware(RateLimitMiddleware(inner, limit=1, window_seconds=60)))
+
+    armed_sampler(2)
+    with caplog.at_level(logging.INFO, logger="app.security"):
+        assert stack.get("/hit", headers={"X-Forwarded-For": CHAIN}).status_code == 200
+        assert stack.get("/hit", headers={"X-Forwarded-For": CHAIN}).status_code == 429
+
+    assert len(_sample_lines(caplog)) == 2
