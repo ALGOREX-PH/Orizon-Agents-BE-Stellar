@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # Ceiling on concurrently running workflows (each fans out LLM calls).
     # execute returns 503 "capacity_exhausted" once this many are in flight.
     orchestrator_max_concurrent: int = 8
+    # Ceiling on concurrent free-form decompose planning calls (each is a
+    # real LLM call; the demo-kit path makes none and is never gated).
+    # Overflow queues inside decompose_timeout_seconds, so a saturated gate
+    # degrades to 504 "decompose_timeout" rather than unbounded LLM spend.
+    decompose_max_concurrent: int = 8
     # Ceiling for a single PaymentEscrow.charge, in USDC.
     max_charge_usdc: float = 100.0
 
