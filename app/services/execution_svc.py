@@ -420,6 +420,28 @@ async def _settle_onchain(
         )
         return (None, None, None)
 
+    # Same ceiling /api/stellar/server/charge enforces — this path reaches the
+    # identical PaymentEscrow.charge, so it must refuse (never clamp) an
+    # over-cap total before any money moves.
+    if total_usdc > settings.max_charge_usdc:
+        logger.error(
+            "task %s: total %.6f USDC exceeds MAX_CHARGE_USDC=%.6f — skipping on-chain "
+            "charge/seal (auth %s, payer %s, %.6f USDC unbilled)",
+            task_id,
+            total_usdc,
+            settings.max_charge_usdc,
+            auth_id_hex,
+            payer,
+            total_usdc,
+        )
+        await _emit(
+            task_id,
+            start,
+            "error",
+            f"charge {total_usdc:.3f} USDC exceeds cap {settings.max_charge_usdc:.3f} — skipping on-chain charge/seal",
+        )
+        return (None, None, None)
+
     try:
         settler = sc._signer_keypair().public_key
         auth_id = bytes.fromhex(auth_id_hex)

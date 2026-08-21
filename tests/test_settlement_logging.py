@@ -85,6 +85,24 @@ def test_skipped_settlement_without_signing_key_is_logged(monkeypatch, caplog):
     )
 
 
+def test_total_above_charge_cap_never_invokes_charge_and_is_logged(monkeypatch, caplog):
+    _use_fake_signer(monkeypatch)
+    monkeypatch.setattr(settings, "max_charge_usdc", 0.01)
+
+    async def no_invoke(contract_id, function_name, args):
+        raise AssertionError("an over-cap total must never reach PaymentEscrow.charge")
+
+    monkeypatch.setattr(sc, "invoke_with_server_key_async", no_invoke)
+    with caplog.at_level(logging.ERROR, logger="app.services.execution_svc"):
+        assert _settle("tsk_settle_cap") == (None, None, None)
+
+    msgs = [r.getMessage() for r in _errors(caplog)]
+    assert any(
+        "tsk_settle_cap" in m and "exceeds MAX_CHARGE_USDC" in m and AUTH_ID_HEX in m and PAYER in m and "0.050000" in m
+        for m in msgs
+    ), f"a refused over-cap charge was not logged with its context: {msgs}"
+
+
 def test_charge_that_does_not_settle_is_logged(monkeypatch, caplog):
     _use_fake_signer(monkeypatch)
 
