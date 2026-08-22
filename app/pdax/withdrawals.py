@@ -17,12 +17,14 @@ from .models.withdrawals import (
     FiatWithdrawRequest,
     FiatWithdrawResult,
 )
+from .trade import _unwrap
 
 
 async def fiat_withdraw(client: PdaxClient, req: FiatWithdrawRequest) -> FiatWithdrawResult:
     validation.validate_fiat_withdraw(req)
     data = await client.request("POST", "pdax-institution/v1/fiat/withdraw", json=req.model_dump(exclude_none=True))
-    return FiatWithdrawResult(**(data.get("data", data)))
+    # Enveloped, but tolerate the flat variant too (as the parse always has).
+    return _unwrap(data, FiatWithdrawResult, enveloped=False)
 
 
 async def user_info_upload(client: PdaxClient, req: FiatWithdrawRequest) -> FiatWithdrawResult:
@@ -31,10 +33,11 @@ async def user_info_upload(client: PdaxClient, req: FiatWithdrawRequest) -> Fiat
         "pdax-institution/v1/fiat/user-info-upload",
         json=req.model_dump(exclude_none=True),
     )
-    return FiatWithdrawResult(**(data.get("data", data)))
+    # Enveloped, but tolerate the flat variant too (as the parse always has).
+    return _unwrap(data, FiatWithdrawResult, enveloped=False)
 
 
 async def crypto_out(client: PdaxClient, req: CryptoOutRequest) -> CryptoOutResult:
     data = await client.request("POST", "pdax-institution/v1/crypto/withdraw", json=req.model_dump(exclude_none=True))
     # Crypto out returns a flat payload (no envelope).
-    return CryptoOutResult(**(data.get("data", data)))
+    return _unwrap(data, CryptoOutResult, enveloped=False)
