@@ -529,10 +529,42 @@ async def _settle_onchain(
         agents_sym = _sv.to_vec([sc.sym(s.agent_id) for s in plan.plan.steps])
         # charge() returns the on-chain receipt id (BytesN<16>); include it in
         # the attestation when the tx meta decoded cleanly, else seal without.
-        receipt_rv = charge.get("return_value")
+        # Coupled to client._finalize_invoke: the decoded return value lands
+        # under "result" ("return_value" is _finalize_submit's key, on the
+        # user-signed path), and bytes have already been converted with
+        # .hex() — so the receipt id arrives as a 32-char hex string.
+        receipt_rv = charge.get("result")
+        receipt_id: bytes | None = None
+        if isinstance(receipt_rv, str):
+            try:
+                receipt_id = bytes.fromhex(receipt_rv)
+            except ValueError:
+                receipt_id = None
+        elif isinstance(receipt_rv, (bytes, bytearray)):
+            receipt_id = bytes(receipt_rv)
         receipts = []
-        if isinstance(receipt_rv, (bytes, bytearray)) and len(receipt_rv) == 16:
-            receipts.append(sc.bytes16(bytes(receipt_rv)))
+        if receipt_id is not None and len(receipt_id) == 16:
+            receipts.append(sc.bytes16(receipt_id))
+        else:
+            # Sealing without the receipt severs the attestation's only
+            # on-chain link to the payment that funded it — never do that
+            # silently.
+            logger.error(
+                "task %s: charge result did not decode to a 16-byte receipt id — "
+                "sealing without receipt link (result=%r, job %s, charge_tx %s, auth %s, payer %s)",
+                task_id,
+                receipt_rv,
+                job_id.hex(),
+                charge_tx,
+                auth_id_hex,
+                payer,
+            )
+            await _emit(
+                task_id,
+                start,
+                "error",
+                "charge receipt id missing — sealing attestation without receipt link",
+            )
         receipts_vec = _sv.to_vec(receipts)
 
         seal = await sc.invoke_with_server_key_async(
