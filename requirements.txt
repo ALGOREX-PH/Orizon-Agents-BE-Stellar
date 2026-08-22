@@ -6,4 +6,4 @@ pydantic>=2.13,<3
 pydantic-settings>=2.13,<3
 sse-starlette>=3.3,<4
 httpx>=0.28,<1
-stellar-sdk>=13.2,<14
+stellar-sdk>=15.0.0,<16
