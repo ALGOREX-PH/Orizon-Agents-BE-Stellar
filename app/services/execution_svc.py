@@ -205,6 +205,20 @@ async def _run(
                 await _emit(task_id, start, "error", f"{worker.name} failed")
                 continue
 
+            if not isinstance(output, dict):
+                # A worker must hand back a dict; anything else is that STEP's
+                # failure — swallowed like a raised exception, not billed, and
+                # never allowed to reach _summarize and sink the whole run.
+                logger.error(
+                    "task %s step %s (%s): returned %s instead of dict — step treated as failed",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    type(output).__name__,
+                )
+                await _emit(task_id, start, "error", f"{worker.name} returned an unusable result")
+                continue
+
             succeeded += 1
             spent += step.est_price_usdc
             if not onchain:
