@@ -276,11 +276,30 @@ async def _run(
         status = _terminal_status(total_steps, succeeded, last_artifact)
 
         if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
-            charge_tx, proof_tx, job_id = await _settle_onchain(
-                task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
-            )
-            if charge_tx and job_id:
-                await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
+            if succeeded == 0:
+                # Same rule as the simulated branch below — a workflow that
+                # produced nothing has nothing to attest to, and nothing to
+                # bill: charging here would consume the payer's escrow
+                # authorization for a dust amount (max(total, 0.000001)) and
+                # seal an attestation for an empty job.
+                logger.info(
+                    "task %s: no step produced output — skipping on-chain charge/seal/ratings (auth %s, payer %s)",
+                    task_id,
+                    auth_id_hex,
+                    payer,
+                )
+                await _emit(
+                    task_id,
+                    start,
+                    "exec",
+                    "no agent produced output — skipping on-chain charge/seal",
+                )
+            else:
+                charge_tx, proof_tx, job_id = await _settle_onchain(
+                    task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
+                )
+                if charge_tx and job_id:
+                    await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
         elif status == "complete":
             # Only a run that actually delivered gets a (simulated) seal — a
             # workflow that produced nothing has nothing to attest to.
