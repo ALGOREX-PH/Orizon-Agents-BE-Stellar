@@ -47,10 +47,11 @@ PHP = "PHP"
 logger = logging.getLogger(__name__)
 
 # Codes raised by our own adapters rather than by PDAX (trade._unwrap, the
-# quote guard below, the withdraw-request guard). They are already stable
-# snake_case identifiers carrying no upstream text, so they reach the client
-# unmapped; everything else goes through the ORIZON_CODES table.
-_INTERNAL_CODES = frozenset({"bad_upstream_shape", "invalid_quote", "invalid_withdraw_request"})
+# quote guard below, the withdraw-request guard, the deposit reconciliation
+# guard). They are already stable snake_case identifiers carrying no upstream
+# text, so they reach the client unmapped; everything else goes through the
+# ORIZON_CODES table.
+_INTERNAL_CODES = frozenset({"bad_upstream_shape", "invalid_quote", "invalid_withdraw_request", "underfunded_deposit"})
 
 
 def _num(x: object) -> str:
@@ -217,33 +218,48 @@ async def start_onramp(client: PdaxClient, req: OnRampRequest) -> RampRecord:
 async def advance_onramp(client: PdaxClient, record: RampRecord) -> RampRecord:
     """PHP has landed — buy USDC then withdraw USDCXLM to the Stellar address."""
     record.status = "converting"
-    try:
-        quote = await trade.firm_quote_v2(
-            client,
-            FirmQuoteV2Request(
-                side="buy",
-                quote_currency=USDC,
-                base_currency=PHP,
-                currency=PHP,
-                quantity=_num(record.php_amount),
-            ),
-        )
-        quote_id = quote.quote_id
-        if not quote_id:
-            raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
-        order = await trade.place_order(
-            client, OrderRequest(quote_id=quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
-        )
-        record.order_id = order.order_id
-        record.usdc_amount = order.base_quantity
-        record.price = order.price
-        ramp_store.add_stage(record, "buy_usdc", "success", f"order {order.order_id}")
-    except PdaxError as e:
-        record.status, record.error = "failed", _log_failure(record, "buy_usdc", e)
-        ramp_store.add_stage(record, "buy_usdc", "failed", record.error)
-        return ramp_store.save(record)
+    if record.order_id is None:
+        try:
+            quote = await trade.firm_quote_v2(
+                client,
+                FirmQuoteV2Request(
+                    side="buy",
+                    quote_currency=USDC,
+                    base_currency=PHP,
+                    currency=PHP,
+                    quantity=_num(record.php_amount),
+                ),
+            )
+            quote_id = quote.quote_id
+            if not quote_id:
+                raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
+            order = await trade.place_order(
+                client, OrderRequest(quote_id=quote_id, side="buy", idempotency_id=str(uuid.uuid4()))
+            )
+            record.order_id = order.order_id
+            record.usdc_amount = order.base_quantity
+            record.price = order.price
+            ramp_store.add_stage(record, "buy_usdc", "success", f"order {order.order_id}")
+        except PdaxError as e:
+            record.status, record.error = "failed", _log_failure(record, "buy_usdc", e)
+            ramp_store.add_stage(record, "buy_usdc", "failed", record.error)
+            return ramp_store.save(record)
+    else:
+        # Re-entry: `_advance_guarded` rolls an interrupted advance back to
+        # `awaiting_payment`, so a retried webhook runs this again with the buy
+        # already settled. `place_order` sends a fresh idempotency id on every
+        # call, so re-quoting here would convert the buyer's pesos a SECOND
+        # time — resume at the payout instead.
+        ramp_store.add_stage(record, "buy_usdc", "success", f"order {record.order_id} already placed")
 
     record.status = "settling"
+    if record.crypto_tx_id is not None:
+        # Same reasoning one stage on: the USDCXLM already left the account and
+        # an on-chain send cannot be recalled, so a re-entry completes the ramp
+        # rather than delivering twice.
+        record.status = "completed"
+        ramp_store.add_stage(record, "withdraw_usdcxlm", "success", f"{record.crypto_tx_id} already sent")
+        return ramp_store.save(record)
     try:
         out = await withdrawals.crypto_out(
             client,
@@ -319,31 +335,39 @@ async def advance_offramp(client: PdaxClient, record: RampRecord) -> RampRecord:
 
     try:
         record.status = "converting"
-        try:
-            quote = await trade.firm_quote_v2(
-                client,
-                FirmQuoteV2Request(
-                    side="sell",
-                    quote_currency=USDC,
-                    base_currency=PHP,
-                    currency=USDC,
-                    quantity=_num(record.usdc_amount),
-                ),
-            )
-            quote_id = quote.quote_id
-            if not quote_id:
-                raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
-            order = await trade.place_order(
-                client, OrderRequest(quote_id=quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
-            )
-            record.order_id = order.order_id
-            record.php_amount = order.total_amount
-            record.price = order.price
-            ramp_store.add_stage(record, "sell_usdc", "success", f"order {order.order_id}")
-        except PdaxError as e:
-            record.status, record.error = "failed", _log_failure(record, "sell_usdc", e)
-            ramp_store.add_stage(record, "sell_usdc", "failed", record.error)
-            return ramp_store.save(record)
+        if record.order_id is None:
+            try:
+                quote = await trade.firm_quote_v2(
+                    client,
+                    FirmQuoteV2Request(
+                        side="sell",
+                        quote_currency=USDC,
+                        base_currency=PHP,
+                        currency=USDC,
+                        quantity=_num(record.usdc_amount),
+                    ),
+                )
+                quote_id = quote.quote_id
+                if not quote_id:
+                    raise PdaxError("firm quote response carried no quote_id", code="invalid_quote")
+                order = await trade.place_order(
+                    client, OrderRequest(quote_id=quote_id, side="sell", idempotency_id=str(uuid.uuid4()))
+                )
+                record.order_id = order.order_id
+                record.php_amount = order.total_amount
+                record.price = order.price
+                ramp_store.add_stage(record, "sell_usdc", "success", f"order {order.order_id}")
+            except PdaxError as e:
+                record.status, record.error = "failed", _log_failure(record, "sell_usdc", e)
+                ramp_store.add_stage(record, "sell_usdc", "failed", record.error)
+                return ramp_store.save(record)
+        else:
+            # Re-entry after an interrupted advance (see advance_onramp): the
+            # sell already settled and `place_order` is idempotent only against
+            # its own per-call uuid, so re-quoting here would sell the
+            # customer's USDC twice. Resume at the payout, which is keyed on the
+            # stable "-payout" identifier and so is deduplicated by PDAX.
+            ramp_store.add_stage(record, "sell_usdc", "success", f"order {record.order_id} already placed")
 
         record.status = "settling"
         try:
@@ -418,6 +442,47 @@ def _warn_unmatched(event: CryptoEvent | FiatEvent, target: str | None) -> None:
     )
 
 
+def _deposit_covers_declared(record: RampRecord, deposited: float) -> bool:
+    """Reconcile what actually ARRIVED against what an off-ramp declared, and
+    fail the ramp if the deposit falls short.
+
+    `start_offramp` records the amount the caller *asked* to sell, and both the
+    sell and the peso payout are sized from it. The only authoritative figure
+    is what the customer actually sent, so without this a ramp declared at
+    100,000 USDC and funded with 1 sells 100,000 out of the institutional
+    balance and pays the beneficiary the full proceeds.
+
+    Amounts are compared through `money.format_amount` like every other amount
+    in this module, so a deposit that matches to the cent can never read as a
+    shortfall on binary-float noise (10.000000000000002 vs 10.0).
+
+    An over-deposit PROCEEDS and settles only the declared amount: the deposit
+    covers the sell, so no payout can exceed what arrived — the conservative
+    invariant here — and failing would strand the whole deposit rather than
+    just the excess. The excess stays in the institutional account and is
+    warned about so it can be returned by hand.
+    """
+    declared = money.to_decimal(_num(record.usdc_amount))
+    arrived = money.to_decimal(_num(deposited))
+    if arrived < declared:
+        e = PdaxError(
+            f"deposit of {_num(deposited)} USDC does not cover the declared {_num(record.usdc_amount)} USDC",
+            code="underfunded_deposit",
+        )
+        record.status, record.error = "failed", _log_failure(record, "reconcile_deposit", e)
+        ramp_store.add_stage(record, "reconcile_deposit", "failed", record.error)
+        return False
+    if arrived > declared:
+        logger.warning(
+            "off-ramp deposit exceeds the declared amount: ramp_id=%s declared=%s deposited=%s identifier=%s",
+            record.ramp_id,
+            _num(record.usdc_amount),
+            _num(deposited),
+            record.identifier,
+        )
+    return True
+
+
 def _match(
     event: CryptoEvent | FiatEvent,
 ) -> tuple[RampRecord | None, Callable[[PdaxClient, RampRecord], Awaitable[RampRecord]] | None]:
@@ -438,16 +503,28 @@ def _match(
         _warn_unmatched(event, None)
         return None, None
 
-    # CryptoEvent — match an off-ramp by its USDCXLM deposit address.
+    # CryptoEvent — match an off-ramp by its USDCXLM deposit address (+ tag).
     if "DEPOSIT" not in event.transaction_type.upper():
         return None, None
     if str(event.status).lower() != "completed":
         return None, None
+    if str(event.asset).upper() != USDCXLM:
+        # An off-ramp sells USDC: a deposit of some unrelated token must never
+        # match one, or an arbitrary asset sent to a tracked address buys a
+        # peso payout. It is still unclaimed money, so it is warned about.
+        _warn_unmatched(event, event.destination_address)
+        return None, None
+    # PDAX may hand out one shared custodial address plus a per-deposit tag, in
+    # which case the tag — not the address — is what identifies the ramp, and
+    # matching on the address alone would pay customer A out of customer B's
+    # deposit. Events that carry no tag fall back to the address match.
+    tag = event.destination_address_tag
     for record in ramp_store.list_all():
         if (
             record.direction == "offramp"
             and record.deposit_address
             and record.deposit_address == event.destination_address
+            and (not tag or record.deposit_tag == tag)
         ):
             return record, advance_offramp
     _warn_unmatched(event, event.destination_address)
@@ -523,6 +600,10 @@ async def handle_event(client: PdaxClient, event: CryptoEvent | FiatEvent) -> Ra
     async with ramp_store.lock_for(record.ramp_id):
         if record.status != "awaiting_payment":
             return record
+        # A matched CryptoEvent is always an off-ramp deposit (see _match): what
+        # it says arrived is the only figure the sell may be sized against.
+        if isinstance(event, CryptoEvent) and not _deposit_covers_declared(record, event.amount):
+            return ramp_store.save(record)
         return await _advance_guarded(client, record, advance)
 
 
