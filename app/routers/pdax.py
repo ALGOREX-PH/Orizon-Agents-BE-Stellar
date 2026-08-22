@@ -134,7 +134,15 @@ async def health() -> dict:
 async def health_deep() -> dict:
     """Actuating dependency check (API-key guarded): probes the PDAX auth
     handshake and reports ok / degraded / unconfigured — never exposing
-    credentials."""
+    credentials. When API_KEY is unset the guard above is a no-op, so the
+    probe is skipped instead: an anonymous caller could otherwise drive
+    repeated real logins, exactly what /health refuses to allow."""
+    if not settings.api_key:
+        return {
+            "status": "skipped",
+            "environment": settings.pdax_environment,
+            "reason": "deep probe requires API_KEY — it performs a real PDAX login",
+        }
     if not (settings.pdax_username and settings.pdax_password):
         return {"status": "unconfigured", "environment": settings.pdax_environment}
     try:
@@ -394,6 +402,11 @@ async def webhook_receive(request: Request) -> dict:
         advanced = await pr.handle_event(get_pdax_client(), event)
     except PdaxError as e:
         pw.release_event(key)
+        # `_fail` passes a client-input 4xx through, so an unmodellable body
+        # (parse_event's 400) is answered terminally and PDAX stops retrying a
+        # payload that can never parse; a transient upstream failure still
+        # collapses to 502, which PDAX does retry — and the released claim
+        # above is what lets that retry be processed rather than deduped.
         raise _fail(e) from e
     except BaseException:
         pw.release_event(key)

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from .client import PdaxClient
 from .models.balances import Balance
+from .transactions import _unwrap_list
 
 
 async def get_balances(client: PdaxClient, currency: str | None = None) -> list[Balance]:
     data = await client.request("GET", "pdax-institution/v1/balances", params={"currency": currency})
-    return [Balance(**b) for b in data.get("data", [])]
+    return _unwrap_list(data, Balance)

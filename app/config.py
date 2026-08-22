@@ -1,7 +1,21 @@
+import base64
+import binascii
+import logging
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015"
+
+# The PDAX environments app/pdax/config.py:BASE_URLS can resolve a base URL
+# for. Written out here rather than imported because that module does
+# `from ..config import settings`: importing it back would run it while this
+# module is still executing (Settings() is constructed at the bottom), so the
+# import would fail. BASE_URLS stays the source of truth —
+# tests/test_config_validators.py asserts the two agree so they cannot drift.
+PDAX_ENVIRONMENTS = ("production", "stage", "uat")
 
 # Advertised service version — the FastAPI app's `version` and the liveness
 # payload both read it here so the number they report can never disagree.
@@ -45,11 +59,55 @@ class Settings(BaseSettings):
     # the public demo stays fully open. When enabled, GET task/trace routes
     # require the per-task read token minted at execute (or a valid API key).
     task_auth_required: bool = False
-    # Per-client-IP sliding-window request budget (in-process, per worker).
-    rate_limit_per_minute: int = 120
+    # Sliding-window request budget (in-process, per worker), spent per key
+    # resolved by app/security.py client_key().
+    #
+    # Sized as a WHOLE-SERVICE budget, because that is what it currently is:
+    # trusted_proxy_hops defaults to 0, so the key is the constant address our
+    # own edge appends and every visitor draws on one bucket. The console's
+    # real cost drives the number — an open dashboard tab polls two endpoints
+    # every 5 s (24 req/min), /app/reputation adds a 4-request burst on mount
+    # and 3 more on every window focus, and both liveness probes are exempt
+    # (EXEMPT_PATHS), so a tab costs ~24/min steady with small bursts on
+    # navigation. 1200/min therefore seats ~50 concurrent tabs before anyone
+    # is throttled, against the 5 that 120/min allowed — a demo that gets
+    # linked somewhere stays usable instead of 429ing its own visitors.
+    #
+    # It still bounds abuse: 20 req/s is a coarse flood cut, and it is not the
+    # cost control for the expensive routes — orchestrator_max_concurrent caps
+    # in-flight workflows (503 capacity_exhausted) and contract reads are
+    # TTL-cached, so a flood buys cheap cached JSON, not LLM calls or RPC.
+    # Once trusted_proxy_hops is tuned this becomes per-visitor and can come
+    # back down; the frontend backs off on 429 and honours Retry-After, so a
+    # tightened limit degrades cadence rather than breaking the console.
+    rate_limit_per_minute: int = 1200
+    # How many TRAILING X-Forwarded-For entries belong to this deployment's own
+    # infrastructure, and are therefore dropped when app/security.py resolves
+    # the caller. 0 — the default — keys on the LAST entry, exactly as this
+    # service always has, so nothing changes until the value is deliberately
+    # tuned. Both directions of error are silent and opposite (too low: the key
+    # is a constant our edge wrote, so every visitor shares one rate-limit
+    # bucket and the access log's client= cannot attribute abuse; too high: the
+    # key is one the CALLER wrote, so the limiter is bypassed by sending a
+    # header). Only tune it against a chain actually observed from this edge —
+    # see forwarded_chain_samples below and client_key()'s docstring.
+    trusted_proxy_hops: int = 0
+    # Diagnostic budget for that tuning: log the raw X-Forwarded-For chain and
+    # the key it resolves to for the first N non-exempt requests after each
+    # process start, then stay silent for the life of the process. 0 disables
+    # it. Deliberately a bounded log sample rather than a diagnostic route —
+    # the chain carries visitors' IP addresses, and API_KEY is empty on demo
+    # deployments so a route could not be reliably gated. Changing any env var
+    # on Render redeploys the service, which re-arms the sample.
+    forwarded_chain_samples: int = 5
     # Ceiling on concurrently running workflows (each fans out LLM calls).
     # execute returns 503 "capacity_exhausted" once this many are in flight.
     orchestrator_max_concurrent: int = 8
+    # Ceiling on concurrent free-form decompose planning calls (each is a
+    # real LLM call; the demo-kit path makes none and is never gated).
+    # Overflow queues inside decompose_timeout_seconds, so a saturated gate
+    # degrades to 504 "decompose_timeout" rather than unbounded LLM spend.
+    decompose_max_concurrent: int = 8
     # Ceiling for a single PaymentEscrow.charge, in USDC.
     max_charge_usdc: float = 100.0
 
@@ -200,6 +258,162 @@ class Settings(BaseSettings):
                 "money-moving route is anonymous. Set API_KEY (in the Render dashboard for the "
                 "deployed service) and send it as the X-API-Key header, or remove the "
                 "credentials above to run a read-only/demo deployment."
+            )
+        return self
+
+    # ── Startup reports (log, never raise) ────────────────────────
+    # The validators above refuse to boot because the misconfiguration they
+    # catch would EXPOSE money routes or sign on the wrong network. The ones
+    # below catch a different class: values that are merely wrong, and whose
+    # only victim is the deployment itself. This service is live on mainnet
+    # with autoDeploy on, so a validator that wrongly rejects a real config
+    # takes the product down on merge — a cost that is never worth paying to
+    # improve an error message. They log loudly at startup instead, naming the
+    # variable and what breaks, so the operator does not have to trace a 500
+    # three layers down at request time.
+
+    @model_validator(mode="after")
+    def _report_unknown_pdax_environment(self) -> "Settings":
+        """Name a mistyped PDAX_ENVIRONMENT at startup, not at first use.
+
+        base_url() (app/pdax/config.py) raises RuntimeError lazily when the
+        first PDAX client is built, so a typo boots clean and then 500s
+        /api/pdax/environment and every other PDAX route.
+
+        Logged rather than raised: an unknown environment resolves to no base
+        URL at all, so the integration is inert — nothing authenticates, trades
+        or moves fiat — which makes this a broken deployment, not an exposure.
+        One sharp edge is called out in the message: an unknown value is also
+        not "production", so _production_webhooks_require_signature above stays
+        silent for it. An empty value is left alone; base_url() defaults it to
+        DEFAULT_ENVIRONMENT ("uat") exactly as it always has.
+        """
+        environment = (self.pdax_environment or "").strip().lower()
+        if environment and environment not in PDAX_ENVIRONMENTS:
+            logger.error(
+                "PDAX_ENVIRONMENT=%r is not a known PDAX environment (expected one of: %s). "
+                "No base URL can be resolved, so every /api/pdax/* route will fail on its "
+                "first call; an unrecognised value is also not treated as production, so the "
+                "webhook-signature requirement will not be enforced. Fix PDAX_ENVIRONMENT.",
+                self.pdax_environment,
+                ", ".join(PDAX_ENVIRONMENTS),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _report_malformed_pdax_otp_secret(self) -> "Settings":
+        """Name a mistyped PDAX_OTP_SECRET at startup, not at the MFA challenge.
+
+        totp_now() (app/pdax/totp.py) base32-decodes the seed the first time
+        PDAX answers a SOFTWARE_TOKEN_MFA challenge; a mistyped seed fails
+        there, one login attempt deep into a code path that only runs when MFA
+        is switched on upstream. The decode below mirrors that function's
+        normalisation and padding exactly, so agreement is not a coincidence.
+
+        Logged rather than raised: a bad seed only breaks this deployment's own
+        PDAX login (it fails closed — no session, no orders), and the value is
+        optional and unset in most deployments, so it can never justify
+        refusing to boot the live service.
+        """
+        secret = self.pdax_otp_secret.strip().replace(" ", "").upper()
+        if not secret:
+            return self
+        remainder = len(secret) % 8
+        padded = secret + ("=" * (8 - remainder)) if remainder else secret
+        try:
+            base64.b32decode(padded)
+        except (binascii.Error, ValueError):
+            # The seed itself is a credential: name the variable, never echo
+            # the value or the decoder's message (which quotes the input).
+            logger.error(
+                "PDAX_OTP_SECRET is not valid base32. Every PDAX login that hits a "
+                "SOFTWARE_TOKEN_MFA challenge will fail to answer it, so no PDAX call can "
+                "authenticate. Re-copy the TOTP seed from the PDAX console, or unset "
+                "PDAX_OTP_SECRET if the account has no MFA."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _report_malformed_stellar_signing_key(self) -> "Settings":
+        """Name a malformed STELLAR_SIGNING_KEY at startup, not on the money path.
+
+        _signer_keypair() (app/stellar/client.py) parses the key lazily and
+        memoizes it, so a bad key boots clean and first shows up as a
+        400 charge_failed on a real payment — the worst possible place to
+        learn about a typo. The two accepted forms below are that function's,
+        so a key this reports as good is one it can build.
+
+        Logged rather than raised: an unparseable key signs nothing, so it
+        fails closed; the exposure the fail-fast validators guard against is
+        the opposite case, a key that works. Raising here would also hand any
+        future key-format drift the power to brick a live mainnet deploy.
+
+        The key is a bearer credential for real funds: this reports the
+        variable and never the value. stellar_sdk's own exception text quotes
+        the rejected seed back, so the exception is deliberately swallowed
+        (no message interpolation, no exc_info) rather than logged.
+        """
+        secret = self.stellar_signing_key.strip()
+        if not secret:
+            return self
+        # Imported here, not at module scope: app.config is imported by
+        # everything (including the smoke scripts) and stellar_sdk costs
+        # ~250ms to import. This runs once, at construction.
+        from stellar_sdk import Keypair
+
+        words = secret.split()
+        try:
+            if len(words) >= 12:
+                Keypair.from_mnemonic_phrase(" ".join(words))
+            else:
+                Keypair.from_secret(secret)
+        except Exception:
+            logger.error(
+                "STELLAR_SIGNING_KEY is malformed — it is neither a valid S… secret key nor a "
+                "valid 12/24-word mnemonic phrase (the value is withheld from this log). Every "
+                "backend-signed transaction will fail, so /api/stellar/server/charge and "
+                "/server/seal will answer 400 charge_failed. Re-inject the key from host secrets."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _report_contract_reads_without_a_source_address(self) -> "Settings":
+        """Name a missing STELLAR_ADMIN_ADDRESS at startup, not per request.
+
+        Every simulate_read needs a source account, and app/stellar/client.py
+        raises RuntimeError("no source address; set STELLAR_ADMIN_ADDRESS")
+        without one — so a deploy that has contract ids but no admin address
+        has 100% of its contract reads failing, with the cause named only in a
+        stack trace three layers down.
+
+        Logged rather than raised: nothing is exposed by the omission (reads
+        fail closed), and /readiness (app/main.py) already reports this exact
+        condition as not_ready — this makes the startup story agree with that
+        signal instead of duplicating or contradicting it. The report is
+        conditioned on at least one contract id being configured, so it stays
+        silent for the demo/local defaults, which have neither and which
+        /readiness already calls incomplete on the contract ids alone.
+        """
+        if self.stellar_admin_address.strip():
+            return self
+        configured = [
+            name
+            for name, value in (
+                ("STELLAR_AGENT_REGISTRY", self.stellar_agent_registry),
+                ("STELLAR_REPUTATION_LEDGER", self.stellar_reputation_ledger),
+                ("STELLAR_PAYMENT_ESCROW", self.stellar_payment_escrow),
+                ("STELLAR_ATTESTATION_REGISTRY", self.stellar_attestation_registry),
+                ("STELLAR_ASSET_SAC", self.stellar_asset_sac),
+            )
+            if value.strip()
+        ]
+        if configured:
+            logger.error(
+                "STELLAR_ADMIN_ADDRESS is not set, but contract ids are configured (%s). Contract "
+                "reads have no source account, so every on-chain read will fail with "
+                "'no source address; set STELLAR_ADMIN_ADDRESS' and /readiness will answer 503 "
+                "not_ready. Set STELLAR_ADMIN_ADDRESS to the G… address that funds simulation.",
+                ", ".join(configured),
             )
         return self
 

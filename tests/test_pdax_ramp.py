@@ -1,11 +1,16 @@
 """Ramp orchestration against a fake PdaxClient: full on/off-ramp lifecycle,
-duplicate-webhook idempotency, and off-ramp payout PII dropped once the
-advance step finishes (success or failure)."""
+duplicate-webhook idempotency, a re-entered ramp never repeating an
+irreversible stage it already completed, off-ramp deposits reconciled on
+amount, asset and tag before anything is sold, unmatched settlement events
+being warned about rather than dropped, failed ramps exposing a code instead
+of upstream text, and off-ramp payout PII dropped once the advance step
+finishes (success or failure) or the payment window expires."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import pytest
 
@@ -330,6 +335,101 @@ def test_retried_webhook_recovers_offramp_and_keeps_payout(monkeypatch):
     asyncio.run(run())
 
 
+def _flaky_once(monkeypatch, module, name: str) -> dict:
+    """Patch a payout call to die once with a non-PdaxError, so the advance is
+    interrupted AFTER the trade has settled — the state `_advance_guarded`
+    rolls back to `awaiting_payment` and a retried webhook re-enters."""
+    calls = {"n": 0}
+    real = getattr(module, name)
+
+    async def flaky(client, req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("interrupted after the trade")
+        return await real(client, req)
+
+    monkeypatch.setattr(module, name, flaky)
+    return calls
+
+
+def test_onramp_reentry_after_a_placed_order_does_not_buy_again(monkeypatch):
+    """The buy is irreversible and `place_order` carries a fresh idempotency id
+    every call, so a re-entered on-ramp must resume at the payout instead of
+    converting the buyer's pesos a second time."""
+    client = _onramp_client()
+    _flaky_once(monkeypatch, ramp.withdrawals, "crypto_out")
+
+    async def run():
+        record = await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+        event = FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        )
+        with pytest.raises(RuntimeError):
+            await ramp.handle_event(client, event)
+        # Re-enterable, with the buy already settled on the record.
+        assert record.status == "awaiting_payment"
+        assert record.order_id == 77
+        recovered = await ramp.handle_event(client, event)
+        assert recovered is not None
+        assert recovered.status == "completed"
+        assert recovered.crypto_tx_id == 555
+        assert client.calls.count("pdax-institution/v1/trade") == 1
+        assert client.calls.count("pdax-institution/v2/trade/quote") == 1
+
+    asyncio.run(run())
+
+
+def test_onramp_reentry_after_a_sent_withdrawal_does_not_send_again():
+    """The other irreversible on-ramp stage: a recorded transaction id means the
+    USDCXLM already left, so a re-entry completes the ramp rather than
+    delivering twice."""
+    client = _onramp_client()
+
+    async def run():
+        record = await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+        record.order_id, record.usdc_amount, record.crypto_tx_id = 77, 10.0, 555
+        calls_before = len(client.calls)
+        advanced = await ramp.advance_onramp(client, record)
+        assert advanced.status == "completed"
+        assert len(client.calls) == calls_before
+
+    asyncio.run(run())
+
+
+def test_offramp_reentry_after_a_placed_order_does_not_sell_again(monkeypatch):
+    """Mirror of the on-ramp case: the sell already settled, so a retried
+    webhook must not sell the customer's USDC a second time."""
+    client = _offramp_client()
+    _flaky_once(monkeypatch, ramp.withdrawals, "fiat_withdraw")
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        event = CryptoEvent(
+            user_id="u1",
+            transaction_type="DEPOSIT",
+            amount=10.0,
+            asset="USDCXLM",
+            destination_address=record.deposit_address,
+            status="completed",
+        )
+        with pytest.raises(RuntimeError):
+            await ramp.handle_event(client, event)
+        assert record.status == "awaiting_payment"
+        assert record.order_id == 77
+        recovered = await ramp.handle_event(client, event)
+        assert recovered is not None
+        assert recovered.status == "completed"
+        assert recovered.withdraw_request_id == "wr1"
+        assert client.calls.count("pdax-institution/v1/trade") == 1
+        assert client.calls.count("pdax-institution/v2/trade/quote") == 1
+
+    asyncio.run(run())
+
+
 def test_malformed_quote_envelope_fails_ramp_cleanly():
     """A PDAX body missing the data envelope must land the ramp in "failed"
     via a PdaxError — never escape as a bare KeyError (a 500 and a ramp
@@ -350,7 +450,10 @@ def test_malformed_quote_envelope_fails_ramp_cleanly():
         advanced = await ramp.handle_event(client, event)
         assert advanced is not None
         assert advanced.status == "failed"
-        assert "malformed PDAX response" in (advanced.error or "")
+        # A code, never the upstream text — the record is returned verbatim by
+        # GET /api/pdax/ramp/{ramp_id}.
+        assert advanced.error == "bad_upstream_shape"
+        assert [s.detail for s in advanced.stages if s.status == "failed"] == ["bad_upstream_shape"]
 
     asyncio.run(run())
 
@@ -374,9 +477,59 @@ def test_malformed_quote_fields_fail_ramp_cleanly():
         assert advanced is not None
         assert advanced.status == "failed"
         assert record.status == "failed"
-        assert "malformed PDAX response" in (advanced.error or "")
+        assert advanced.error == "bad_upstream_shape"
 
     asyncio.run(run())
+
+
+UPSTREAM_TEXT = "Insufficient balance in institutional account 9912."
+
+
+def _failing_onramp_client() -> FakePdaxClient:
+    client = _onramp_client()
+    client.responses["v2/trade/quote"] = PdaxError(UPSTREAM_TEXT, code="OT010006", http_status=400)
+    return client
+
+
+async def _run_failing_onramp(client) -> object:
+    await ramp.start_onramp(client, OnRampRequest(**ONRAMP_REQ))
+    return await ramp.handle_event(
+        client,
+        FiatEvent(
+            identifier="on-1",
+            user_id="u1",
+            amount=500.0,
+            transaction_type="DEPOSIT",
+            status="COMPLETED",
+        ),
+    )
+
+
+def test_failed_ramp_record_carries_a_code_not_upstream_text(caplog):
+    """GET /api/pdax/ramp/{ramp_id} returns the record verbatim, so the record
+    owes the client the same thing `_fail` does: a stable snake_case code, and
+    never the upstream message."""
+    client = _failing_onramp_client()
+    with caplog.at_level(logging.ERROR, logger="app.pdax.ramp"):
+        advanced = asyncio.run(_run_failing_onramp(client))
+    assert advanced.status == "failed"
+    assert advanced.error == "insufficient_balance"
+    failed_details = [s.detail for s in advanced.stages if s.status == "failed"]
+    assert failed_details == ["insufficient_balance"]
+    assert all(UPSTREAM_TEXT not in (s.detail or "") for s in advanced.stages)
+    # The raw text is not lost — it lives in the server-side log line only.
+    assert any(UPSTREAM_TEXT in r.getMessage() for r in caplog.records)
+
+
+def test_ramp_status_route_never_returns_upstream_text(client):
+    """End-to-end: the same doctrine holds through the HTTP surface."""
+    fake = _failing_onramp_client()
+    record = asyncio.run(_run_failing_onramp(fake))
+    r = client.get(f"/api/pdax/ramp/{record.ramp_id}")
+    assert r.status_code == 200
+    assert "9912" not in r.text
+    assert "Insufficient balance" not in r.text
+    assert r.json()["error"] == "insufficient_balance"
 
 
 def test_unmatched_event_is_warned_not_silently_dropped(caplog):
@@ -449,6 +602,72 @@ def test_events_we_never_act_on_stay_quiet(caplog):
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
+def test_abandoned_offramp_payout_details_expire(caplog):
+    """An off-ramp whose agent never sends the USDC must not hold the
+    beneficiary's account number for the life of the process — it is only
+    popped on terminal advance or after 500 newer ramps evict it."""
+    client = _offramp_client()
+
+    async def run():
+        return await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+
+    record = asyncio.run(run())
+    assert record.ramp_id in ramp._PAYOUTS
+    # Inside the payment window the ramp may still settle: PII stays.
+    ramp.expire_payouts(now=time.monotonic() + ramp.PAYOUT_STASH_TTL_SECONDS - 1)
+    assert record.ramp_id in ramp._PAYOUTS
+    with caplog.at_level(logging.INFO, logger="app.pdax.ramp"):
+        ramp.expire_payouts(now=time.monotonic() + ramp.PAYOUT_STASH_TTL_SECONDS + 1)
+    assert ramp._PAYOUTS == {}
+    assert any("dropped abandoned off-ramp payout details" in r.getMessage() for r in caplog.records)
+
+
+def test_starting_an_offramp_sweeps_stale_payouts(monkeypatch):
+    """The sweep is event-driven (no background task), so a later off-ramp
+    clears an abandoned one."""
+    client = _offramp_client()
+    monkeypatch.setattr(ramp, "PAYOUT_STASH_TTL_SECONDS", -1.0)
+
+    async def run():
+        first = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        second = await ramp.start_offramp(client, OffRampRequest(**{**OFFRAMP_REQ, "identifier": "off-2"}))
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first.ramp_id not in ramp._PAYOUTS
+    assert list(ramp._PAYOUTS) == [second.ramp_id]
+
+
+def test_expired_payout_fails_the_advance_rather_than_paying_a_stale_beneficiary(monkeypatch):
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        monkeypatch.setattr(ramp, "PAYOUT_STASH_TTL_SECONDS", -1.0)
+        return await ramp.advance_offramp(client, record)
+
+    advanced = asyncio.run(run())
+    assert advanced.status == "failed"
+    assert advanced.error == "missing_payout_details"
+    assert "v1/fiat/withdraw" not in client.calls
+
+
+def test_oversized_payout_field_fails_the_ramp_not_the_process():
+    """OffRampRequest leaves some fields unbounded while FiatWithdrawRequest
+    bounds them, so the withdrawal body can fail local validation. That must
+    land as a failed stage, not a ValidationError 500 on a funded ramp."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**{**OFFRAMP_REQ, "sender_first_name": "A" * 300}))
+        return await ramp.advance_offramp(client, record)
+
+    advanced = asyncio.run(run())
+    assert advanced.status == "failed"
+    assert advanced.error == "invalid_withdraw_request"
+    assert "v1/fiat/withdraw" not in client.calls  # never left the process
+
+
 def test_advance_offramp_without_payout_fails_cleanly():
     client = _offramp_client()
 
@@ -457,6 +676,144 @@ def test_advance_offramp_without_payout_fails_cleanly():
         ramp._PAYOUTS.clear()  # simulate a restart losing the payout stash
         advanced = await ramp.advance_offramp(client, record)
         assert advanced.status == "failed"
-        assert advanced.error == "missing payout details"
+        assert advanced.error == "missing_payout_details"
+
+    asyncio.run(run())
+
+
+def _deposit_event(
+    address: str | None, amount: float, *, asset: str = "USDCXLM", tag: str | None = None
+) -> CryptoEvent:
+    return CryptoEvent(
+        user_id="u1",
+        transaction_type="DEPOSIT",
+        amount=amount,
+        asset=asset,
+        destination_address=address,
+        destination_address_tag=tag,
+        status="completed",
+    )
+
+
+def _traded(client: FakePdaxClient) -> bool:
+    return "pdax-institution/v1/trade" in client.calls
+
+
+def test_underfunded_offramp_deposit_never_sells(caplog):
+    """The declared amount is what the caller asked to sell; the deposit is what
+    actually arrived. Selling the declared 10 USDC against a 1 USDC deposit pays
+    the beneficiary out of the institutional balance."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        return await ramp.handle_event(client, _deposit_event(record.deposit_address, 1.0))
+
+    with caplog.at_level(logging.ERROR, logger="app.pdax.ramp"):
+        advanced = asyncio.run(run())
+    assert advanced is not None
+    assert advanced.status == "failed"
+    assert advanced.error == "underfunded_deposit"
+    assert [s.detail for s in advanced.stages if s.status == "failed"] == ["underfunded_deposit"]
+    assert not _traded(client)
+    assert "pdax-institution/v1/fiat/withdraw" not in client.calls
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("stage=reconcile_deposit" in m and "code=underfunded_deposit" in m for m in errors), errors
+
+
+def test_deposit_matching_within_float_noise_still_settles(caplog):
+    """Amounts are floats here and formatted through money.format_amount
+    everywhere else — a deposit that matches must not read as a shortfall on
+    binary representation noise."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        return await ramp.handle_event(client, _deposit_event(record.deposit_address, 10.000000000000002))
+
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        advanced = asyncio.run(run())
+    assert advanced is not None
+    assert advanced.status == "completed"
+    assert advanced.withdraw_request_id == "wr1"
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_over_deposit_settles_the_declared_amount_and_is_warned_about(caplog):
+    """An over-deposit covers the sell, so it proceeds — but the excess is
+    parked in the institutional account and has to be returned by hand."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        return await ramp.handle_event(client, _deposit_event(record.deposit_address, 25.0))
+
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        advanced = asyncio.run(run())
+    assert advanced is not None
+    assert advanced.status == "completed"
+    assert advanced.usdc_amount == 10.0  # only the declared amount was sold
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "deposit exceeds the declared amount" in m and "declared=10" in m and "deposited=25" in m for m in warnings
+    ), warnings
+
+
+def test_wrong_asset_deposit_does_not_match_an_offramp(caplog):
+    """An off-ramp sells USDC: some other token landing on the deposit address
+    must not buy a peso payout."""
+    client = _offramp_client()
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        assert await ramp.handle_event(client, _deposit_event(record.deposit_address, 10.0, asset="XLM")) is None
+        assert record.status == "awaiting_payment"
+
+    with caplog.at_level(logging.WARNING, logger="app.pdax.ramp"):
+        asyncio.run(run())
+    assert not _traded(client)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("unmatched settlement event" in m and "asset=XLM" in m for m in warnings), warnings
+
+
+SHARED_ADDRESS = "GSHAREDCUSTODIAL"
+
+
+def _tagged_deposit_address(tag: str) -> dict:
+    return {"data": {"currency": "USDCXLM", "address": SHARED_ADDRESS, "tag": tag}}
+
+
+def test_tagged_deposit_matches_the_ramp_that_owns_the_tag():
+    """PDAX may issue one shared custodial address plus a per-deposit tag, so
+    matching on the address alone would pay customer A out of B's deposit."""
+    client = _offramp_client()
+    client.responses["v1/crypto/deposit"] = _tagged_deposit_address("tag-a")
+
+    async def run():
+        first = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        client.responses["v1/crypto/deposit"] = _tagged_deposit_address("tag-b")
+        second = await ramp.start_offramp(client, OffRampRequest(**{**OFFRAMP_REQ, "identifier": "off-2"}))
+        advanced = await ramp.handle_event(client, _deposit_event(SHARED_ADDRESS, 10.0, tag="tag-b"))
+        assert advanced is not None
+        assert advanced.ramp_id == second.ramp_id
+        assert advanced.status == "completed"
+        # The older ramp on the same address is untouched.
+        assert first.status == "awaiting_payment"
+
+    asyncio.run(run())
+
+
+def test_untagged_event_falls_back_to_the_address_match():
+    """Not every deposit event carries a tag; the address match must still
+    settle the ramp rather than stranding the customer's USDC."""
+    client = _offramp_client()
+    client.responses["v1/crypto/deposit"] = _tagged_deposit_address("tag-a")
+
+    async def run():
+        record = await ramp.start_offramp(client, OffRampRequest(**OFFRAMP_REQ))
+        assert record.deposit_tag == "tag-a"
+        advanced = await ramp.handle_event(client, _deposit_event(SHARED_ADDRESS, 10.0))
+        assert advanced is not None
+        assert advanced.status == "completed"
 
     asyncio.run(run())

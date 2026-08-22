@@ -14,6 +14,7 @@ import logging
 
 import pytest
 
+from app.config import settings
 from app.stellar import client as sc
 
 RPC_LOGGER = "app.stellar.client"
@@ -59,16 +60,28 @@ class _FakeServer:
         return _FakeSimulation()
 
 
+# Public testnet AgentRegistry id. These reads build a real simulation
+# envelope, so contract_ids() must resolve to a well-formed id — the settings
+# default is "" and only a gitignored .env ever filled it, which is why this
+# file passed locally and failed in CI with "contract_id is invalid".
+_TEST_AGENT_REGISTRY = "CAPHXWU53UZUZJGV7IAE57NNMH3YYB5MTWO6YA53KKMXSFVLOITBJ3GQ"
+
+
 @pytest.fixture()
 def fake_rpc(monkeypatch):
     """Point client._server() at a scriptable in-process fake."""
+    # contract_ids() is lru_cached, so the id has to be in place before the
+    # first call and the cache dropped on both sides of the test.
+    monkeypatch.setattr(settings, "stellar_agent_registry", _TEST_AGENT_REGISTRY)
+    sc.contract_ids.cache_clear()
 
     def install(fail_on: str | None = None) -> _FakeServer:
         server = _FakeServer(fail_on)
         monkeypatch.setattr(sc, "_server", lambda **_kw: server)
         return server
 
-    return install
+    yield install
+    sc.contract_ids.cache_clear()
 
 
 def _rpc_lines(caplog, level: int) -> list[str]:

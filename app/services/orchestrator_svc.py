@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 # The reputation floor may never starve the planner of choices.
 _MIN_ROUTABLE_AGENTS = 3
 
+# Gate on the free-form planning LLM call. /execute's fan-out is bounded by
+# orchestrator_max_concurrent (execution_svc); this is the same protection for
+# /decompose, whose non-kit path makes a real LLM call per request while the
+# rate limiter spends one shared bucket. Sized at call time from settings like
+# execute_plan's ceiling — the semaphore is rebuilt only when the configured
+# limit changes (production never does; tests tune it).
+_plan_gate: asyncio.Semaphore | None = None
+_plan_gate_limit: int | None = None
+
+
+def _decompose_gate() -> asyncio.Semaphore:
+    global _plan_gate, _plan_gate_limit
+    limit = max(1, settings.decompose_max_concurrent)
+    if _plan_gate is None or _plan_gate_limit != limit:
+        _plan_gate = asyncio.Semaphore(limit)
+        _plan_gate_limit = limit
+    return _plan_gate
+
 
 # ── Curated 6-step pipeline used when the intent matches a DemoKit ─────────
 # (agent_id, rationale-template). Prices come from the registry at build time.
@@ -152,14 +170,22 @@ async def decompose(intent: str) -> DecomposeResponse:
 
     # ── Free-form path: LLM orchestrator decides the plan ──────────────────
     prompt = build_planning_prompt(_registry_prompt_fragment(reps), intent)
+
+    async def _bounded_plan() -> Any:
+        # The kit short circuit above never takes this gate; every request
+        # here is a real LLM call, so concurrency is capped the same way
+        # /execute's fan-out is. Queue time counts against the budget below.
+        async with _decompose_gate():
+            return await orchestrator_agent.arun(prompt)
+
     # Hard end-to-end budget for the planning call — without it a hung
     # upstream would pin this request for the OpenAI client's full
     # timeout x retry envelope. The router maps TimeoutError to a 504.
     result = await asyncio.wait_for(
-        orchestrator_agent.arun(prompt),
+        _bounded_plan(),
         timeout=settings.decompose_timeout_seconds,
     )
-    plan: Plan = result.content  # type: ignore[assignment]
+    plan: Plan = result.content
 
     # Clamp to known agents; backfill names + snap price to registry truth.
     cleaned: list[PlanStep] = []

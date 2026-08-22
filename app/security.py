@@ -4,7 +4,11 @@ Lightweight, dependency-free hardening primitives.
 - `require_api_key` — optional FastAPI dependency. When `settings.api_key`
   is unset (the default for the public demo) it is a no-op; when set, the
   request must carry a matching `X-API-Key` header or it is rejected 401.
-- `RateLimitMiddleware` — per-client-IP sliding-window rate limiter as a
+- `client_key` — resolves who a request belongs to from the X-Forwarded-For
+  chain, with the proxy trust boundary set by `TRUSTED_PROXY_HOPS`. Both the
+  limiter and the access log key on it, so its docstring is where the
+  consequences of getting that boundary wrong are written down.
+- `RateLimitMiddleware` — sliding-window rate limiter over that key, as a
   pure ASGI middleware (no external deps). Window/limit come from settings;
   liveness paths and CORS preflights are exempt. Rate-limited responses
   carry `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers.
@@ -13,7 +17,9 @@ Lightweight, dependency-free hardening primitives.
   bodies as the app reads them, answering 413 either way. Per-path
   overrides tighten the budget for routes that buffer the whole body.
 - `RequestContextMiddleware` — pure ASGI request-id propagation + one-line
-  INFO access log per request (method, path, status, duration, id).
+  INFO access log per request (method, path, status, duration, id). Also
+  drives `ForwardedChainSampler`, a bounded once-per-process dump of the raw
+  proxy chain that exists so `TRUSTED_PROXY_HOPS` can be read off production.
 """
 
 from __future__ import annotations
@@ -71,21 +77,145 @@ class RequestIdLogFilter(logging.Filter):
         return True
 
 
-def client_key(scope: dict) -> str:
+# Resolved key for a forwarded chain that is too short to contain a client
+# entry once the trusted hops are removed. A literal, never an address: it
+# cannot collide with a real client, and seeing it as `client=` in the access
+# log is itself the signal that TRUSTED_PROXY_HOPS is set higher than the
+# number of entries this edge actually appends.
+CHAIN_TOO_SHORT_KEY = "forwarded-chain-too-short"
+
+
+def _trusted_hops() -> int:
+    """Configured trailing-hop count, floored at 0 (a negative value would
+    index back into the caller-controlled end of the chain)."""
+    return max(0, settings.trusted_proxy_hops)
+
+
+def client_key(scope: dict, hops: int | None = None) -> str:
     """Resolve the client key used for rate limiting and access logs.
 
-    Keys on the LAST X-Forwarded-For hop: proxies append, so the leftmost
-    entries are client-controlled — trusting them would let a caller rotate
-    fake IPs to bypass the limiter and bloat the bucket table.
+    X-Forwarded-For is append-only: each proxy adds the address of the peer it
+    received the request from, so the chain reads
+
+        <anything the caller sent>, <caller's address>, <our edge>, <...>
+
+    and only the RIGHTMOST entries were written by infrastructure we control.
+    `TRUSTED_PROXY_HOPS` says how many of those trailing entries are ours; they
+    are dropped, and the next entry to the left is the client.
+
+    The count cannot be guessed — it is a property of the deployment (Vercel's
+    rewrite proxy and Render's edge both rewrite this header, and how many
+    entries each contributes is not observable from outside) — and BOTH ways of
+    getting it wrong are silent:
+
+    * **Too few hops trusted.** The resolved entry is one our own edge wrote,
+      which is the same value for every visitor. `rate_limit_per_minute` then
+      behaves as a single budget for the WHOLE service rather than per visitor
+      — a handful of open dashboard tabs can 429 everyone — and `client=` is a
+      constant in every access line, so abuse cannot be attributed during an
+      incident.
+    * **Too many hops trusted.** The resolved entry is one the CALLER wrote.
+      Anyone can then mint a fresh bucket per request by rotating a header
+      value: the limiter stops limiting, and the bucket table grows with
+      attacker-chosen keys.
+
+    The default of 0 reproduces the original behaviour exactly — the last entry,
+    whatever it is — so deploying this changes nothing until the hop count is
+    tuned against a chain actually observed from production (the sampler below
+    logs one; see FORWARDED_CHAIN_SAMPLES).
+
+    Two degenerate chains are handled deliberately rather than by clamping:
+
+    * Fewer entries than the configured hop count leaves no client entry at
+      all. That resolves to CHAIN_TOO_SHORT_KEY, NOT to the leftmost entry —
+      the leftmost is precisely the one the caller controls, so clamping there
+      would turn a too-high setting into a limiter bypass instead of a loud,
+      visible misconfiguration.
+    * Empty entries (a stray `,` or a trailing comma) are dropped before
+      indexing. Falling through to `scope["client"]` on that input would be
+      unsafe here: uvicorn runs with `--proxy-headers --forwarded-allow-ips='*'`
+      (render.yaml), and its ProxyHeadersMiddleware then overwrites
+      scope["client"] with the LEFTMOST X-Forwarded-For entry — caller-supplied.
+      The scope fallback below is therefore reached only when the header is
+      absent entirely (local runs, tests), never on the deployed path.
     """
     headers = dict(scope.get("headers") or [])
     fwd = headers.get(b"x-forwarded-for")
     if fwd:
-        last = fwd.decode("latin-1").split(",")[-1].strip()
-        if last:
-            return last
+        chain = [entry.strip() for entry in fwd.decode("latin-1").split(",")]
+        chain = [entry for entry in chain if entry]
+        if chain:
+            skip = _trusted_hops() if hops is None else max(0, hops)
+            index = len(chain) - 1 - skip
+            return chain[index] if index >= 0 else CHAIN_TOO_SHORT_KEY
     client = scope.get("client")
     return client[0] if client else "unknown"
+
+
+class ForwardedChainSampler:
+    """Log the first N forwarded chains a process sees, then go quiet.
+
+    `TRUSTED_PROXY_HOPS` can only be set correctly by someone who has SEEN a
+    real chain from this deployment's edge — Vercel's rewrite proxy and
+    Render's edge both rewrite X-Forwarded-For, and how many entries each
+    contributes is not observable from outside. This makes exactly that
+    visible, in Render's log stream, without becoming a new attack surface:
+
+    * **Not a route.** A diagnostic endpoint returning the chain would be an
+      unauthenticated disclosure of visitors' IP addresses on every deployment
+      whose API_KEY is empty (the public-demo default), and would stay
+      reachable long after the hop count was settled. Logs are already an
+      operator-only sink behind Render's dashboard auth, and already carry one
+      client address per request in the access line — this adds the rest of
+      the chain, for a handful of requests, to a stream that shape of data is
+      already in.
+    * **Not per request.** The budget is spent within the first few requests
+      after a deploy; from then on the cost is one integer comparison. That
+      matters on a 512 MB shared-CPU instance, and it keeps client addresses
+      from accumulating in the log for traffic that is not being diagnosed.
+    * **Not on the probe paths.** EXEMPT_PATHS requests come from Render's own
+      health checker and from uptime monitors, whose chains do not look like a
+      browser's; sampling them would burn the budget on unrepresentative data
+      before a real visitor ever arrives.
+
+    Re-arming needs no code change: every env var edit on Render restarts the
+    service, so setting FORWARDED_CHAIN_SAMPLES takes a fresh sample.
+    """
+
+    def __init__(self, budget: int | None = None) -> None:
+        self.reset(budget)
+
+    def reset(self, budget: int | None = None) -> None:
+        """Re-arm the sample. Production re-arms by restarting; tests call it."""
+        self.budget = max(0, settings.forwarded_chain_samples if budget is None else budget)
+        self.remaining = self.budget
+
+    def sample(self, scope: dict) -> None:
+        if self.remaining <= 0:
+            return
+        self.remaining -= 1
+        headers = dict(scope.get("headers") or [])
+        raw = (headers.get(b"x-forwarded-for") or b"").decode("latin-1")
+        chain = [entry.strip() for entry in raw.split(",") if entry.strip()]
+        peer = scope.get("client")
+        logger.info(
+            "forwarded chain sample %d/%d on %s %s: entries=%d chain=%s peer=%s "
+            "TRUSTED_PROXY_HOPS=%d resolves client=%s — set TRUSTED_PROXY_HOPS to the number of "
+            "TRAILING entries this edge appends, so the one to their left is the visitor",
+            self.budget - self.remaining,
+            self.budget,
+            scope.get("method", "-"),
+            scope.get("path", "-"),
+            len(chain),
+            chain,
+            peer[0] if peer else "-",
+            _trusted_hops(),
+            client_key(scope),
+        )
+
+
+# Armed at import, i.e. once per worker process.
+forwarded_chain_sampler = ForwardedChainSampler()
 
 
 async def require_api_key(
@@ -110,6 +240,11 @@ class RequestContextMiddleware:
     request — method, path, status, duration, id — so any response can be
     correlated with server logs. Probe paths (EXEMPT_PATHS) still get the
     header but are not logged, to keep the log free of health-check noise.
+
+    Being the outermost layer, this is also where the forwarded-chain sample
+    is taken (see ForwardedChainSampler): the sample line and the access line
+    for the same request carry the same request id, so the raw chain and the
+    key it resolved to can be read side by side.
     """
 
     def __init__(self, app: Any) -> None:
@@ -136,6 +271,16 @@ class RequestContextMiddleware:
 
         method = scope.get("method", "-")
         path = scope.get("path", "-")
+
+        # Bounded, once-per-process: the first few real requests after a
+        # restart print the raw forwarded chain so TRUSTED_PROXY_HOPS can be
+        # read off production instead of guessed. Sampled here, before the
+        # request is dispatched, so a 429 or a 500 is sampled too; probe paths
+        # are skipped so they cannot spend the budget on chains that do not
+        # look like a browser's.
+        if path not in EXEMPT_PATHS:
+            forwarded_chain_sampler.sample(scope)
+
         started = time.monotonic()
 
         async def send_with_context(message: dict) -> None:
@@ -262,12 +407,18 @@ class BodyLimitMiddleware:
 
 
 class RateLimitMiddleware:
-    """Sliding-window per-client-IP limiter. In-process only (single worker).
+    """Sliding-window limiter, keyed by client_key(). In-process (1 worker).
 
-    Timestamps per IP live in a dict of deques; old entries are pruned on
-    each hit and the whole table is swept periodically so idle IPs don't
+    Timestamps per key live in a dict of deques; old entries are pruned on
+    each hit and the whole table is swept periodically so idle keys don't
     accumulate. All mutation happens synchronously between awaits, so it is
     safe under a single asyncio event loop without locks.
+
+    How much this limits *per visitor* rather than *in total* is entirely
+    decided by TRUSTED_PROXY_HOPS — see client_key(). At the default of 0 the
+    key is a constant this deployment's edge wrote, so `rate_limit_per_minute`
+    is one budget for the whole service; the default limit is sized for that
+    reading.
     """
 
     _SWEEP_EVERY = 1024  # requests between full-table sweeps

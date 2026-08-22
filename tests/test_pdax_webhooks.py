@@ -244,9 +244,73 @@ def test_parse_error_releases_claim(client, monkeypatch):
     treated as a duplicate."""
     monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
     payload = {"asset_type": "crypto", "status": "completed"}  # missing required fields
-    with pytest.raises(ValidationError):
-        _post_signed(client, payload)
+    r = _post_signed(client, payload)
+    assert r.status_code == 400
     assert pw.event_key(payload) not in pw._seen_events
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"asset_type": "crypto", "status": "completed"},  # missing required fields
+        {"asset_type": "fiat", "status": "COMPLETED"},  # missing required fields
+        # Right shape, wrong types — amount is not a number.
+        {**_crypto_payload(), "amount": "a-lot"},
+        # An event type PDAX has not modelled here at all.
+        {"asset_type": "loyalty_points", "event": "redeemed", "identifier": "lp-1"},
+    ],
+)
+def test_signed_unparseable_body_is_400_not_500(client, monkeypatch, payload):
+    """A signed body no event model fits can never parse, so retrying it is
+    pointless: it must answer the terminal 400 that stops PDAX's redelivery
+    loop, not the 500 that had it retrying the same payload forever."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    r = _post_signed(client, payload)
+    assert r.status_code == 400
+
+
+def test_unparseable_body_is_not_primed_for_infinite_retry(client, monkeypatch):
+    """The 400 is terminal for PDAX, and the claim is released so a corrected
+    redelivery under the same event_key is still processed rather than
+    answered {"duplicate": true}."""
+    monkeypatch.setattr(settings, "pdax_webhook_secret", "s3cret")
+    monkeypatch.setattr("app.routers.pdax.get_pdax_client", lambda: object())
+    broken = {**_crypto_payload(), "amount": "a-lot"}
+    assert _post_signed(client, broken).status_code == 400
+    assert pw.event_key(broken) not in pw._seen_events
+    # Same event_key, now well-formed: it is processed, not deduped.
+    fixed = {**broken, "amount": 5.0}
+    assert pw.event_key(fixed) == pw.event_key(broken)
+    ok = _post_signed(client, fixed)
+    assert ok.status_code == 200
+    assert "duplicate" not in ok.json()
+
+
+def test_parse_event_folds_validation_error_into_typed_error():
+    """The typed error carries a 400, which is what `_fail` passes through to
+    make the answer terminal."""
+    with pytest.raises(PdaxError) as exc:
+        pw.parse_event({"asset_type": "crypto", "status": "completed"})
+    assert exc.value.http_status == 400
+    assert exc.value.code == "bad_webhook_payload"
+    assert isinstance(exc.value.__cause__, ValidationError)
+
+
+def test_parse_event_still_parses_both_event_models():
+    crypto = pw.parse_event(_crypto_payload())
+    assert crypto.asset == "USDCXLM"
+    fiat = pw.parse_event(
+        {
+            "identifier": "fx-1",
+            "user_id": "u1",
+            "amount": 500.0,
+            "asset_type": "fiat",
+            "transaction_type": "DEPOSIT",
+            "status": "COMPLETED",
+        }
+    )
+    assert fiat.asset == "PHP"
 
 
 def test_claim_event_second_claim_rejected():
