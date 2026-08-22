@@ -173,6 +173,45 @@ def test_settlement_exception_is_logged_with_traceback(monkeypatch, caplog):
     assert rec.exc_info is not None
 
 
+def test_cancellation_mid_settlement_is_logged_and_reraised(monkeypatch, caplog):
+    """A deploy-triggered cancel landing between the charge submit and its
+    confirmation must not bypass the reconstruction log: the charge may still
+    settle on-chain, and CancelledError is a BaseException the generic handler
+    never sees. Cancellation semantics are preserved — it re-raises."""
+    _use_fake_signer(monkeypatch)
+
+    async def cancelled_invoke(contract_id, function_name, args):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sc, "invoke_with_server_key_async", cancelled_invoke)
+    with caplog.at_level(logging.ERROR, logger="app.services.execution_svc"):
+        with pytest.raises(asyncio.CancelledError):
+            _settle("tsk_settle_cancel")
+
+    msgs = [r.getMessage() for r in _errors(caplog)]
+    assert any(
+        "tsk_settle_cancel" in m and "cancelled" in m and AUTH_ID_HEX in m and PAYER in m and "0.050000" in m
+        for m in msgs
+    ), f"a cancelled settlement was never logged with its context: {msgs}"
+
+
+def test_settlement_failure_trace_line_is_generic(monkeypatch):
+    """Trace lines are world-readable when TASK_AUTH_REQUIRED is off — the raw
+    exception text belongs in the server log, never in the trace stream."""
+    _use_fake_signer(monkeypatch)
+
+    def boom() -> Keypair:
+        raise RuntimeError("soroban rpc unreachable")
+
+    monkeypatch.setattr(sc, "_signer_keypair", boom)
+    assert _settle("tsk_settle_trace") == (None, None, None)
+
+    lines = state.traces["tsk_settle_trace"]
+    errors = [ln for ln in lines if ln.level == "error"]
+    assert any(ln.msg == "on-chain settlement failed" for ln in errors)
+    assert not any("soroban rpc unreachable" in ln.msg for ln in lines)
+
+
 def test_settlement_logs_never_carry_the_signing_key(monkeypatch, caplog):
     _use_fake_signer(monkeypatch)
 

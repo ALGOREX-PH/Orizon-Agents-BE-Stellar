@@ -616,6 +616,24 @@ async def _settle_onchain(
                 "error",
                 f"seal status={seal.get('status')} hash={proof_tx}",
             )
+    except asyncio.CancelledError:
+        # CancelledError is a BaseException, so the handler below never sees
+        # it — yet a shutdown cancel (main.py's drain window) can land between
+        # the charge submit and its confirmation, when the charge may still
+        # settle on-chain. The reconstruction log must fire before the
+        # cancellation propagates; cancellation semantics are preserved by
+        # re-raising.
+        logger.error(
+            "task %s: on-chain settlement cancelled mid-flight "
+            "(auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
+            task_id,
+            auth_id_hex,
+            payer,
+            total_usdc,
+            charge_tx,
+            proof_tx,
+        )
+        raise
     except Exception as e:
         logger.error(
             "task %s: on-chain settlement failed: %s (auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
