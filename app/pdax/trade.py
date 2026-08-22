@@ -108,7 +108,4 @@ async def list_orders(
             "endDate": end_date,
         },
     )
-    try:
-        return [Order(**o) for o in data.get("data", [])]
-    except (TypeError, AttributeError, ValidationError) as e:
-        raise PdaxError("malformed PDAX response", code="bad_upstream_shape") from e
+    return _unwrap_list(data, Order)
