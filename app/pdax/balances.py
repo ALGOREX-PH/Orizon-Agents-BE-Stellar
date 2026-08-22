@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .client import PdaxClient
 from .models.balances import Balance
-from .transactions import _unwrap_list
+from .trade import _unwrap_list
 
 
 async def get_balances(client: PdaxClient, currency: str | None = None) -> list[Balance]:
