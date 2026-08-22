@@ -44,6 +44,22 @@ def _unwrap(data: Any, model: type[_M], *, enveloped: bool = True) -> _M:
         raise PdaxError("malformed PDAX response", code="bad_upstream_shape") from e
 
 
+def _unwrap_list(data: Any, model: type[_M]) -> list[_M]:
+    """Parse an enveloped PDAX list body into `model`s, folding malformed
+    upstream shapes into a PdaxError.
+
+    The list counterpart of `_unwrap` above, with the same contract: a body
+    that is not an object, a `data` envelope that is not a list of objects, or
+    an entry carrying fields the model rejects must surface as a PdaxError —
+    never a bare AttributeError/TypeError/ValidationError, which no route
+    catches and every caller would see as an unhandled 500.
+    """
+    try:
+        return [model(**item) for item in data.get("data", [])]
+    except (TypeError, AttributeError, ValidationError) as e:
+        raise PdaxError("malformed PDAX response", code="bad_upstream_shape") from e
+
+
 async def indicative_price(client: PdaxClient, params: IndicativePriceParams) -> Quote:
     data = await client.request("GET", "pdax-institution/v1/trade/price", params=params.model_dump())
     return _unwrap(data, Quote)
@@ -92,7 +108,4 @@ async def list_orders(
             "endDate": end_date,
         },
     )
-    try:
-        return [Order(**o) for o in data.get("data", [])]
-    except (TypeError, AttributeError, ValidationError) as e:
-        raise PdaxError("malformed PDAX response", code="bad_upstream_shape") from e
+    return _unwrap_list(data, Order)

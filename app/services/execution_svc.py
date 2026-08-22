@@ -200,7 +200,23 @@ async def _run(
                     e,
                     exc_info=True,
                 )
-                await _emit(task_id, start, "error", f"{worker.name} failed: {e}")
+                # Trace lines are world-readable when TASK_AUTH_REQUIRED is
+                # off — the raw exception text stays in the server log above.
+                await _emit(task_id, start, "error", f"{worker.name} failed")
+                continue
+
+            if not isinstance(output, dict):
+                # A worker must hand back a dict; anything else is that STEP's
+                # failure — swallowed like a raised exception, not billed, and
+                # never allowed to reach _summarize and sink the whole run.
+                logger.error(
+                    "task %s step %s (%s): returned %s instead of dict — step treated as failed",
+                    task_id,
+                    step.agent_id,
+                    worker.name,
+                    type(output).__name__,
+                )
+                await _emit(task_id, start, "error", f"{worker.name} returned an unusable result")
                 continue
 
             succeeded += 1
@@ -260,11 +276,30 @@ async def _run(
         status = _terminal_status(total_steps, succeeded, last_artifact)
 
         if auth_id_hex and payer:  # equivalent to `onchain`, spelled out to narrow the optionals
-            charge_tx, proof_tx, job_id = await _settle_onchain(
-                task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
-            )
-            if charge_tx and job_id:
-                await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
+            if succeeded == 0:
+                # Same rule as the simulated branch below — a workflow that
+                # produced nothing has nothing to attest to, and nothing to
+                # bill: charging here would consume the payer's escrow
+                # authorization for a dust amount (max(total, 0.000001)) and
+                # seal an attestation for an empty job.
+                logger.info(
+                    "task %s: no step produced output — skipping on-chain charge/seal/ratings (auth %s, payer %s)",
+                    task_id,
+                    auth_id_hex,
+                    payer,
+                )
+                await _emit(
+                    task_id,
+                    start,
+                    "exec",
+                    "no agent produced output — skipping on-chain charge/seal",
+                )
+            else:
+                charge_tx, proof_tx, job_id = await _settle_onchain(
+                    task_id, start, plan, payer=payer, auth_id_hex=auth_id_hex, total_usdc=spent
+                )
+                if charge_tx and job_id:
+                    await _submit_ratings(task_id, start, plan, context, payer=payer, job_id=job_id)
         elif status == "complete":
             # Only a run that actually delivered gets a (simulated) seal — a
             # workflow that produced nothing has nothing to attest to.
@@ -494,10 +529,42 @@ async def _settle_onchain(
         agents_sym = _sv.to_vec([sc.sym(s.agent_id) for s in plan.plan.steps])
         # charge() returns the on-chain receipt id (BytesN<16>); include it in
         # the attestation when the tx meta decoded cleanly, else seal without.
-        receipt_rv = charge.get("return_value")
+        # Coupled to client._finalize_invoke: the decoded return value lands
+        # under "result" ("return_value" is _finalize_submit's key, on the
+        # user-signed path), and bytes have already been converted with
+        # .hex() — so the receipt id arrives as a 32-char hex string.
+        receipt_rv = charge.get("result")
+        receipt_id: bytes | None = None
+        if isinstance(receipt_rv, str):
+            try:
+                receipt_id = bytes.fromhex(receipt_rv)
+            except ValueError:
+                receipt_id = None
+        elif isinstance(receipt_rv, (bytes, bytearray)):
+            receipt_id = bytes(receipt_rv)
         receipts = []
-        if isinstance(receipt_rv, (bytes, bytearray)) and len(receipt_rv) == 16:
-            receipts.append(sc.bytes16(bytes(receipt_rv)))
+        if receipt_id is not None and len(receipt_id) == 16:
+            receipts.append(sc.bytes16(receipt_id))
+        else:
+            # Sealing without the receipt severs the attestation's only
+            # on-chain link to the payment that funded it — never do that
+            # silently.
+            logger.error(
+                "task %s: charge result did not decode to a 16-byte receipt id — "
+                "sealing without receipt link (result=%r, job %s, charge_tx %s, auth %s, payer %s)",
+                task_id,
+                receipt_rv,
+                job_id.hex(),
+                charge_tx,
+                auth_id_hex,
+                payer,
+            )
+            await _emit(
+                task_id,
+                start,
+                "error",
+                "charge receipt id missing — sealing attestation without receipt link",
+            )
         receipts_vec = _sv.to_vec(receipts)
 
         seal = await sc.invoke_with_server_key_async(
@@ -549,6 +616,24 @@ async def _settle_onchain(
                 "error",
                 f"seal status={seal.get('status')} hash={proof_tx}",
             )
+    except asyncio.CancelledError:
+        # CancelledError is a BaseException, so the handler below never sees
+        # it — yet a shutdown cancel (main.py's drain window) can land between
+        # the charge submit and its confirmation, when the charge may still
+        # settle on-chain. The reconstruction log must fire before the
+        # cancellation propagates; cancellation semantics are preserved by
+        # re-raising.
+        logger.error(
+            "task %s: on-chain settlement cancelled mid-flight "
+            "(auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
+            task_id,
+            auth_id_hex,
+            payer,
+            total_usdc,
+            charge_tx,
+            proof_tx,
+        )
+        raise
     except Exception as e:
         logger.error(
             "task %s: on-chain settlement failed: %s (auth %s, payer %s, %.6f USDC, charge_tx=%s, proof_tx=%s)",
@@ -561,7 +646,7 @@ async def _settle_onchain(
             proof_tx,
             exc_info=True,
         )
-        await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
+        await _emit(task_id, start, "error", "on-chain settlement failed")
 
     return (charge_tx, proof_tx, settled_job_id)
 
@@ -628,5 +713,5 @@ async def _submit_ratings(
                 task_id,
                 start,
                 "error",
-                f"reputation submit failed for {step.agent_name}: {e}",
+                f"reputation submit failed for {step.agent_name}",
             )
