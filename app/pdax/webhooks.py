@@ -14,9 +14,12 @@ import hashlib
 import hmac
 from collections import OrderedDict
 
+from pydantic import ValidationError
+
 from ..config import settings
 from .client import PdaxClient
 from .config import allow_unsigned_webhooks
+from .errors import PdaxError
 from .models.webhooks import (
     CryptoEvent,
     FiatEvent,
@@ -47,11 +50,25 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
 
 
 def parse_event(payload: dict) -> CryptoEvent | FiatEvent:
-    """Coerce an inbound webhook body into the right event model."""
+    """Coerce an inbound webhook body into the right event model.
+
+    A signed body that fits neither event model is permanently bad: it fails
+    identically on every redelivery. Fold the ValidationError into a PdaxError
+    carrying http_status=400 so the receiver answers a terminal 4xx (`_fail`
+    passes client-input 4xx through) instead of the 500 that had PDAX retrying
+    an unparseable payload forever.
+    """
     asset_type = str(payload.get("asset_type", "")).lower()
-    if asset_type == "fiat":
-        return FiatEvent(**payload)
-    return CryptoEvent(**payload)
+    try:
+        if asset_type == "fiat":
+            return FiatEvent(**payload)
+        return CryptoEvent(**payload)
+    except ValidationError as e:
+        raise PdaxError(
+            "unparseable PDAX webhook payload",
+            code="bad_webhook_payload",
+            http_status=400,
+        ) from e
 
 
 # Processed-event keys, to make webhook delivery idempotent (PDAX may retry).

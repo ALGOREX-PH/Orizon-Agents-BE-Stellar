@@ -402,6 +402,11 @@ async def webhook_receive(request: Request) -> dict:
         advanced = await pr.handle_event(get_pdax_client(), event)
     except PdaxError as e:
         pw.release_event(key)
+        # `_fail` passes a client-input 4xx through, so an unmodellable body
+        # (parse_event's 400) is answered terminally and PDAX stops retrying a
+        # payload that can never parse; a transient upstream failure still
+        # collapses to 502, which PDAX does retry — and the released claim
+        # above is what lets that retry be processed rather than deduped.
         raise _fail(e) from e
     except BaseException:
         pw.release_event(key)
