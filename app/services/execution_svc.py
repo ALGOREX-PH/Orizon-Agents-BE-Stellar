@@ -200,7 +200,9 @@ async def _run(
                     e,
                     exc_info=True,
                 )
-                await _emit(task_id, start, "error", f"{worker.name} failed: {e}")
+                # Trace lines are world-readable when TASK_AUTH_REQUIRED is
+                # off — the raw exception text stays in the server log above.
+                await _emit(task_id, start, "error", f"{worker.name} failed")
                 continue
 
             succeeded += 1
@@ -561,7 +563,7 @@ async def _settle_onchain(
             proof_tx,
             exc_info=True,
         )
-        await _emit(task_id, start, "error", f"on-chain settlement failed: {e}")
+        await _emit(task_id, start, "error", "on-chain settlement failed")
 
     return (charge_tx, proof_tx, settled_job_id)
 
@@ -628,5 +630,5 @@ async def _submit_ratings(
                 task_id,
                 start,
                 "error",
-                f"reputation submit failed for {step.agent_name}: {e}",
+                f"reputation submit failed for {step.agent_name}",
             )
