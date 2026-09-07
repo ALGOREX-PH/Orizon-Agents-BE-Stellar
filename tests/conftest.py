@@ -23,6 +23,7 @@ def hermetic_settings():
         "api_key": settings.api_key,
         "max_charge_usdc": settings.max_charge_usdc,
         "stellar_reputation_ledger": settings.stellar_reputation_ledger,
+        "stellar_agent_registry": settings.stellar_agent_registry,
         "stellar_admin_address": settings.stellar_admin_address,
     }
     settings.stellar_signing_key = ""
@@ -37,6 +38,10 @@ def hermetic_settings():
     # A live ledger id in .env would make reputation reads hit testnet RPC —
     # tests must stay offline, so force the prior-fallback path.
     settings.stellar_reputation_ledger = ""
+    # Same reasoning for the agent registry: a live id in .env would let the
+    # 1.02 registry-sync loop (started by lifespan, which every TestClient
+    # runs) fire real testnet RPC from inside the hermetic suite.
+    settings.stellar_agent_registry = ""
     yield settings
     for k, v in saved.items():
         setattr(settings, k, v)
