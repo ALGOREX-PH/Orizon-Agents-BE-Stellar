@@ -86,12 +86,14 @@ def _kit_step(
     eta: float,
     reps: dict[str, reputation_svc.RepInfo],
     substituted_for: str | None = None,
+    degraded: bool = False,
 ) -> PlanStep:
     """One curated-pipeline step, priced from the registry and rep-stamped.
 
     `eta` is the ROLE's eta (from _KIT_ETAS), not the agent's, so a substitute
     inherits the timing of the step it fills. Price is the acting agent's own
-    rate — the buyer pays whoever actually does the work.
+    rate — the buyer pays whoever actually does the work. `degraded` marks a
+    step the starvation backstop re-admitted below the floor.
     """
     return PlanStep(
         agent_id=agent.id,
@@ -100,6 +102,7 @@ def _kit_step(
         est_price_usdc=agent.price,
         est_eta_seconds=eta,
         substituted_for=substituted_for,
+        degraded=degraded,
         **_rep_fields(reps.get(agent.id)),
     )
 
@@ -252,7 +255,7 @@ async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_
         )
     for agent, rationale, info in dropped:
         if agent.id in readmit_ids:
-            steps.append(_kit_step(agent, rationale, _KIT_ETAS.get(agent.id, 1.0), reps))
+            steps.append(_kit_step(agent, rationale, _KIT_ETAS.get(agent.id, 1.0), reps, degraded=True))
             taken.add(agent.id)
             notices.append(
                 PlanFloorNotice(
