@@ -109,6 +109,14 @@ class PlanStep(BaseModel):
     est_eta_seconds: float = Field(..., ge=0)
     rep_bps: int | None = None  # smoothed reputation at plan time (0..10_000)
     rep_source: Literal["onchain", "prior"] | None = None
+    # The designated agent this step replaced, when the reputation floor forced
+    # a substitution on the kit path. None on the normal path. Lets the plan
+    # card badge the step inline without re-joining the response notices.
+    substituted_for: str | None = None
+    # True when this step was re-admitted below the routing floor by the
+    # starvation backstop — kept so the plan stays workable, but flagged so the
+    # buyer sees it is a degraded choice. Inline mate to substituted_for.
+    degraded: bool = False
 
 
 class Plan(BaseModel):
@@ -121,6 +129,22 @@ class StoredPlan(BaseModel):
     plan: Plan
     total_usdc: float
     total_eta: float
+
+
+class PlanFloorNotice(BaseModel):
+    """One reputation-floor action taken while building a plan.
+
+    Surfaced on DecomposeResponse so the buyer sees why a curated pipeline
+    changed shape rather than a silently reshuffled plan — story 3.02 renders
+    these. Additive with a safe default; clients that ignore it are unaffected.
+    """
+
+    kind: Literal["excluded", "substituted", "degraded"]
+    agent_id: str  # the designated kit agent the floor acted on
+    agent_name: str | None = None
+    replacement_id: str | None = None  # the substitute, when kind == "substituted"
+    replacement_name: str | None = None
+    reason: str  # e.g. "below routing floor (4200 < 5500 bps)"
 
 
 # ───── Trace ───────────────────────────────────────────────
@@ -168,6 +192,10 @@ class DecomposeResponse(BaseModel):
     steps: list[PlanStep]
     total_usdc: float
     total_eta: float
+    # Reputation-floor actions taken while building this plan (exclusions,
+    # substitutions, starvation-backstop degradations). Empty on the common
+    # path where every routed agent clears the floor.
+    notices: list[PlanFloorNotice] = Field(default_factory=list)
 
 
 class ExecuteRequest(BaseModel):
