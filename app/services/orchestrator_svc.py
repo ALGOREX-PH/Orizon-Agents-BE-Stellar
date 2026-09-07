@@ -194,6 +194,10 @@ async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_
     steps: list[PlanStep] = []
     notices: list[PlanFloorNotice] = []
     taken: set[str] = set()
+    # Sub-floor agents with no substitute — held until after the loop so the
+    # starvation backstop can re-admit the strongest before the rest are
+    # recorded as plain exclusions.
+    dropped: list[tuple[Agent, str, reputation_svc.RepInfo | None]] = []
 
     for agent_id, rationale in _KIT_PIPELINE:
         agent = state.agents.get(agent_id)
@@ -224,6 +228,41 @@ async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_
                     replacement_id=sub.id,
                     replacement_name=sub.name,
                     reason=_floor_reason(info),
+                )
+            )
+        else:
+            dropped.append((agent, rationale, info))
+
+    # Starvation backstop — reuse _MIN_ROUTABLE_AGENTS rather than invent a
+    # second rule. If the floor left too few steps, re-admit the highest-scored
+    # dropped kit agents (top-N by smoothed score, id breaking ties) and record
+    # the degradation; the remainder are recorded as exclusions. Re-admitted
+    # steps are appended in pipeline order for a coherent plan.
+    by_score = sorted(
+        dropped,
+        key=lambda d: (-(d[2].smoothed_bps if d[2] is not None else 0), d[0].id),
+    )
+    deficit = max(0, _MIN_ROUTABLE_AGENTS - len(steps))
+    readmit_ids = {d[0].id for d in by_score[:deficit]}
+    if readmit_ids:
+        logger.warning(
+            "reputation floor left only %d kit step(s); re-admitting %d dropped agent(s) by smoothed score",
+            len(steps),
+            len(readmit_ids),
+        )
+    for agent, rationale, info in dropped:
+        if agent.id in readmit_ids:
+            steps.append(_kit_step(agent, rationale, _KIT_ETAS.get(agent.id, 1.0), reps))
+            taken.add(agent.id)
+            notices.append(
+                PlanFloorNotice(
+                    kind="degraded",
+                    agent_id=agent.id,
+                    agent_name=agent.name,
+                    reason=(
+                        "re-admitted below the floor to keep the plan workable "
+                        f"(fewer than {_MIN_ROUTABLE_AGENTS} agents cleared it)"
+                    ),
                 )
             )
         else:
