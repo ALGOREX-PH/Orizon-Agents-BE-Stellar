@@ -158,6 +158,12 @@ def test_starvation_backstop_keeps_kit_plan_workable(seeded: object) -> None:
     assert degraded == {"agt_09l5", "agt_11c0"}
     assert {"agt_09l5", "agt_11c0"} <= set(ids)
 
+    # Re-admitted steps carry the inline degraded flag; the substitute does not.
+    by_id = {s.agent_id: s for s in resp.steps}
+    assert by_id["agt_09l5"].degraded is True
+    assert by_id["agt_11c0"].degraded is True
+    assert by_id["agt_01h8"].degraded is False
+
     # Everything else the floor removed is surfaced as an exclusion, never
     # silently gone.
     excluded = {n.agent_id for n in resp.notices if n.kind == "excluded"}
