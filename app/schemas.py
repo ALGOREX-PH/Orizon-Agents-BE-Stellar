@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field, computed_field
 
 # ───── Registry ────────────────────────────────────────────
 AgentStatus = Literal["online", "idle", "offline"]
+# Provenance is contracted evidence, not cosmetics: SOW §6.3's "≥ 2 externally
+# operated agents" must be provable from the API, so every agent carries where
+# it came from (story 1.02).
+AgentSource = Literal["seeded", "onchain"]
 
 
 class Agent(BaseModel):
@@ -21,6 +25,7 @@ class Agent(BaseModel):
     # Registering wallet (G...) — populated for on-chain indexed agents,
     # None for the seeded catalog. Story 1.08's operator view filters on it.
     owner: str | None = None
+    source: AgentSource = "seeded"
 
 
 # ───── Tasks ───────────────────────────────────────────────
