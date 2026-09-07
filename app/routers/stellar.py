@@ -248,6 +248,25 @@ class RegisterAgentReq(BaseModel):
 @router.post("/build/register-agent", response_model=XdrResponse)
 async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
+    # UX preflight: refuse a taken id BEFORE the wallet signs — a duplicate
+    # would otherwise only surface as the on-chain AlreadyExists, after the
+    # user already approved the transaction. The simulate read RAISES for an
+    # unknown id (same contract behaviour read_agent relies on), so a read
+    # that succeeds means the id exists. Read failures fall through open: the
+    # chain stays the real guard, and the TOCTOU window between this check
+    # and the user's submit is accepted.
+    try:
+        await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(req.agent_id)],
+        )
+    except Exception:
+        pass  # unknown id (or transient read failure) — proceed to build
+    else:
+        raise HTTPException(409, "agent_id_taken")
+
     try:
         from stellar_sdk import scval as _sv
 
