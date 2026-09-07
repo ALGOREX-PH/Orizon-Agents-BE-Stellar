@@ -248,6 +248,8 @@ class RegisterAgentReq(BaseModel):
 @router.post("/build/register-agent", response_model=XdrResponse)
 async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
+    from stellar_sdk.exceptions import AccountNotFoundException
+
     # UX preflight: refuse a taken id BEFORE the wallet signs — a duplicate
     # would otherwise only surface as the on-chain AlreadyExists, after the
     # user already approved the transaction. The simulate read RAISES for an
@@ -285,6 +287,13 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
             source=req.owner,
         )
         return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        # The build loads the owner account before anything else, so an
+        # unfunded wallet dies here — and pre-hardening it surfaced as the
+        # same opaque build_failed as a duplicate id or a bad charset
+        # (1.01 audit finding). Name it so the FE can say "fund your wallet".
+        logger.warning("register-agent build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
     except Exception as e:
         logger.exception("register-agent build failed")
         raise HTTPException(400, "build_failed") from e

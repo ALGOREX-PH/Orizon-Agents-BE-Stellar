@@ -60,3 +60,22 @@ def test_register_fails_open_when_the_preflight_read_fails(client, monkeypatch):
     r = _register(client)
     assert r.status_code == 200
     assert r.json()["xdr"] == "AAAA-fake-xdr"
+
+
+def test_register_names_an_unfunded_owner(client, monkeypatch):
+    # 1.01 audit finding: load_account fails first for a new wallet, and the
+    # opaque build_failed was indistinguishable from a duplicate or a bad
+    # charset. The FE needs to be able to say "fund your wallet".
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    def _unknown(*a, **k):
+        raise RuntimeError("unknown id")
+
+    def _unfunded(*a, **k):
+        raise AccountNotFoundException("account not found")
+
+    monkeypatch.setattr(sc, "simulate_read", _unknown)
+    monkeypatch.setattr(sc, "build_invoke_xdr", _unfunded)
+    r = _register(client)
+    assert r.status_code == 400
+    assert "owner_account_unfunded" in r.text
