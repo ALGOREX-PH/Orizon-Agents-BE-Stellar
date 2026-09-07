@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.agents.workers.external_http import ExternalHttpWorker
+from app.agents.workers.external_http import MAX_RESPONSE_BYTES, ExternalDispatchError, ExternalHttpWorker
 from app.schemas import Plan, PlanStep, StoredPlan, Task
 from app.services import execution_svc
 from app.state import state
@@ -160,3 +160,33 @@ def test_operator_error_fails_the_step_unbilled(monkeypatch: pytest.MonkeyPatch)
     assert final.status == "failed"
     assert final.spent == 0.0
     assert final.artifact is None
+
+
+def test_response_missing_summary_is_rejected() -> None:
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(_req: Request) -> JSONResponse:
+        return JSONResponse({"artifact": {"title": "x", "files": []}})  # no non-empty summary
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            with pytest.raises(ExternalDispatchError):
+                await _worker(client).run("x", "y")
+
+    asyncio.run(go())
+
+
+def test_oversize_response_is_rejected() -> None:
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(_req: Request) -> JSONResponse:
+        return JSONResponse({"summary": "x" * (MAX_RESPONSE_BYTES + 1024)})  # over the size cap
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            with pytest.raises(ExternalDispatchError):
+                await _worker(client).run("x", "y")
+
+    asyncio.run(go())
