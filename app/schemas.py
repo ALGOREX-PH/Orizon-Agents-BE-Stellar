@@ -184,6 +184,10 @@ class DecomposeResponse(BaseModel):
     steps: list[PlanStep]
     total_usdc: float
     total_eta: float
+    # Reputation-floor actions taken while building this plan (exclusions,
+    # substitutions, starvation-backstop degradations). Empty on the common
+    # path where every routed agent clears the floor.
+    notices: list[PlanFloorNotice] = Field(default_factory=list)
 
 
 class ExecuteRequest(BaseModel):
