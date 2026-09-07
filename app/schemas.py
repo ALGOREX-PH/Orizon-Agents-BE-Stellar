@@ -123,6 +123,22 @@ class StoredPlan(BaseModel):
     total_eta: float
 
 
+class PlanFloorNotice(BaseModel):
+    """One reputation-floor action taken while building a plan.
+
+    Surfaced on DecomposeResponse so the buyer sees why a curated pipeline
+    changed shape rather than a silently reshuffled plan — story 3.02 renders
+    these. Additive with a safe default; clients that ignore it are unaffected.
+    """
+
+    kind: Literal["excluded", "substituted", "degraded"]
+    agent_id: str  # the designated kit agent the floor acted on
+    agent_name: str | None = None
+    replacement_id: str | None = None  # the substitute, when kind == "substituted"
+    replacement_name: str | None = None
+    reason: str  # e.g. "below routing floor (4200 < 5500 bps)"
+
+
 # ───── Trace ───────────────────────────────────────────────
 TraceLevel = Literal["input", "exec", "proof", "cost", "out", "error", "artifact"]
 
