@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.agents.workers.external_http import MAX_RESPONSE_BYTES, ExternalDispatchError, ExternalHttpWorker
 from app.schemas import Plan, PlanStep, StoredPlan, Task
@@ -202,6 +202,36 @@ def test_oversize_response_is_rejected() -> None:
     @app.post("/run")
     async def run(_req: Request) -> JSONResponse:
         return JSONResponse({"summary": "x" * (MAX_RESPONSE_BYTES + 1024)})  # over the size cap
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            with pytest.raises(ExternalDispatchError):
+                await _worker(client).run("x", "y")
+
+    asyncio.run(go())
+
+
+def test_non_json_response_is_rejected() -> None:
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(_req: Request) -> PlainTextResponse:
+        return PlainTextResponse("this is not json")
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            with pytest.raises(ExternalDispatchError):
+                await _worker(client).run("x", "y")
+
+    asyncio.run(go())
+
+
+def test_non_object_json_response_is_rejected() -> None:
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(_req: Request) -> JSONResponse:
+        return JSONResponse([1, 2, 3])  # valid JSON, but an array not an object
 
     async def go() -> None:
         async with _client_for(app) as client:
