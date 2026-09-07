@@ -13,10 +13,14 @@ import asyncio
 from typing import Any
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.agents.workers.external_http import ExternalHttpWorker
+from app.schemas import Plan, PlanStep, StoredPlan, Task
+from app.services import execution_svc
+from app.state import state
 
 ENDPOINT = "http://operator.local/run"
 
@@ -61,3 +65,56 @@ def test_dispatch_carries_the_envelope_and_returns_the_output() -> None:
     # the idempotency key the operator can dedupe on IS the dispatch id
     assert seen["idempotency_key"] == body["dispatch_id"]
     assert seen["content_type"] == "application/json"
+
+
+def test_orchestrator_accepts_the_external_dispatch_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The whole point of the spike: a step routed to an EXTERNAL agent id — one
+    # with no local worker — is dispatched over HTTP and its response flows back
+    # through execution_svc._run as a completed, billed step. Today that same id
+    # hits the `unknown agent` skip at execution_svc._run:161 and earns nothing.
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(req: Request) -> JSONResponse:
+        body = await req.json()
+        return JSONResponse(
+            {
+                "summary": f"external agent handled: {body['intent']}",
+                "artifact": {"title": "landing.html", "files": [{"content": "<!doctype html>\n<html></html>\n"}]},
+                "source": "external",
+            }
+        )
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            worker = _worker(client)
+            monkeypatch.setattr(execution_svc, "get_worker", lambda aid: worker if aid == "ext_demo1" else None)
+
+            plan = StoredPlan(
+                id="pln_ext_spike",
+                intent="build a bakery landing page",
+                plan=Plan(
+                    steps=[
+                        PlanStep(
+                            agent_id="ext_demo1",
+                            agent_name="external.demo",
+                            rationale="build the page",
+                            est_price_usdc=0.02,
+                            est_eta_seconds=1.0,
+                        )
+                    ]
+                ),
+                total_usdc=0.02,
+                total_eta=1.0,
+            )
+            state.add_plan(plan)
+            state.add_task(Task(id="tsk_ext_spike", intent=plan.intent, agents=1, spent=0.0, status="running"))
+            await execution_svc._run(plan, "tsk_ext_spike")
+
+    asyncio.run(go())
+
+    final = state.tasks["tsk_ext_spike"]
+    assert final.status == "complete"
+    assert final.spent == 0.02  # the external step was billed at its registered price
+    assert final.artifact is not None
+    assert final.artifact["title"] == "landing.html"
