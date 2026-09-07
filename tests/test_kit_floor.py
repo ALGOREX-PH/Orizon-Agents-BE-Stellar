@@ -91,3 +91,19 @@ def test_sub_floor_agent_is_substituted_and_surfaced(seeded: object) -> None:
     assert note.agent_id == "agt_05x7"
     assert note.replacement_id == "agt_01h8"
     assert "5500" in note.reason  # the notice names the floor it failed
+
+
+def test_kit_plan_is_deterministic(seeded: object) -> None:
+    # Same reputation state, twice: identical steps, substitutions, and
+    # notices. plan_id is a random token so it is excluded from the compare.
+    reps = {"agt_05x7": _sub_floor("agt_05x7"), "agt_02k2": _sub_floor("agt_02k2")}
+    first = _run_kit(reps)
+    second = _run_kit(reps)
+
+    assert [s.agent_id for s in first.steps] == [s.agent_id for s in second.steps]
+    assert [s.substituted_for for s in first.steps] == [s.substituted_for for s in second.steps]
+    assert [(n.kind, n.agent_id, n.replacement_id) for n in first.notices] == [
+        (n.kind, n.agent_id, n.replacement_id) for n in second.notices
+    ]
+    assert first.total_usdc == second.total_usdc
+    assert first.total_eta == second.total_eta
