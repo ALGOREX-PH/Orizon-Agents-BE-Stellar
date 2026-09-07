@@ -10,6 +10,7 @@ Write routes have two shapes:
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import secrets
 import time
@@ -159,6 +160,55 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
         # cause chain and RPC-layer logging.
         logger.warning("agent read failed for %s: %s", agent_id, e)
         raise HTTPException(404, "agent_read_failed") from e
+
+
+class AgentIdAvailability(BaseModel):
+    available: bool
+    # Stable strings — story 1.04's form maps them to field errors and the
+    # 5.03 guide documents them: id_malformed · id_reserved · id_taken.
+    reason: str | None = None
+    message: str | None = None
+    owner: str | None = None
+
+
+@router.get("/agent-id-available/{agent_id}", response_model=AgentIdAvailability)
+async def agent_id_available(agent_id: str = Path(..., max_length=64)) -> AgentIdAvailability:
+    """Advisory pre-signature check for the registration form (id blur).
+
+    Deliberately loose on the path param so a malformed id gets a friendly
+    200 + reason instead of a bare 422 — the form shows the message inline.
+    The check is advisory only: the contract's AlreadyExists is the final
+    answer, and a race between this and submit is accepted (story 1.03).
+    """
+    if not re.fullmatch(AGENT_ID_PATTERN, agent_id):
+        return AgentIdAvailability(
+            available=False,
+            reason="id_malformed",
+            message="allowed: letters, digits and underscore, 1-32 chars",
+        )
+    if agent_id.startswith("agt_"):
+        return AgentIdAvailability(
+            available=False,
+            reason="id_reserved",
+            message="agt_ ids belong to the seeded catalog",
+        )
+    try:
+        found = await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(agent_id)],
+        )
+    except Exception:
+        # Unknown id or transient read failure — advisory, so fail open;
+        # the chain still guards the actual registration.
+        return AgentIdAvailability(available=True)
+    owner = found.get("owner") if isinstance(found, dict) else None
+    return AgentIdAvailability(
+        available=False,
+        reason="id_taken",
+        owner=owner if isinstance(owner, str) else None,
+    )
 
 
 @router.get("/reputation", response_model=ReputationBatch)
