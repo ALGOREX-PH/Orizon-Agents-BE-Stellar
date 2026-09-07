@@ -241,7 +241,7 @@ class RegisterAgentReq(BaseModel):
     # AFTER the user has already signed. Reject it at the API instead.
     agent_id: str = Field(..., pattern=r"^[A-Za-z0-9_]{1,32}$")
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(default_factory=list, max_length=16)
+    skills: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_]{1,32}$")]] = Field(default_factory=list, max_length=16)
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
