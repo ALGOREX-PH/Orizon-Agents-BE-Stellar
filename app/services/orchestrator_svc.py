@@ -11,7 +11,7 @@ from ..agents.registry import get_worker
 from ..agents.workers.prompt_safety import fence_user_input
 from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
-from ..schemas import DecomposeResponse, Plan, PlanStep, StoredPlan
+from ..schemas import Agent, DecomposeResponse, Plan, PlanStep, StoredPlan
 from ..state import state
 from . import reputation_svc
 
@@ -66,6 +66,73 @@ def _rep_fields(info: reputation_svc.RepInfo | None) -> dict[str, Any]:
     if info is None:
         return {}
     return {"rep_bps": info.smoothed_bps, "rep_source": info.source}
+
+
+# Kit-pipeline agent ids. Substitutes are drawn from OUTSIDE this set —
+# borrowing one kit role's agent to fill another is itself a silent reshuffle,
+# which the product rules forbid.
+_KIT_AGENT_IDS: frozenset[str] = frozenset(aid for aid, _ in _KIT_PIPELINE)
+
+
+def _floor_reason(info: reputation_svc.RepInfo | None) -> str:
+    """Why the floor acted on an agent, with the deciding lower-bound bps."""
+    lb = info.lower_bound_bps if info is not None else 0
+    return f"below routing floor ({lb} < {settings.reputation_floor_bps} bps)"
+
+
+def _kit_step(
+    agent: Agent,
+    rationale: str,
+    eta: float,
+    reps: dict[str, reputation_svc.RepInfo],
+    substituted_for: str | None = None,
+) -> PlanStep:
+    """One curated-pipeline step, priced from the registry and rep-stamped.
+
+    `eta` is the ROLE's eta (from _KIT_ETAS), not the agent's, so a substitute
+    inherits the timing of the step it fills. Price is the acting agent's own
+    rate — the buyer pays whoever actually does the work.
+    """
+    return PlanStep(
+        agent_id=agent.id,
+        agent_name=agent.name,
+        rationale=rationale,
+        est_price_usdc=agent.price,
+        est_eta_seconds=eta,
+        substituted_for=substituted_for,
+        **_rep_fields(reps.get(agent.id)),
+    )
+
+
+def _floor_substitute(
+    designated: Agent,
+    reps: dict[str, reputation_svc.RepInfo],
+    taken: set[str],
+) -> Agent | None:
+    """Deterministically pick a floor-clearing replacement for a sub-floor kit
+    agent: worker-backed, OFF the kit pipeline, sharing >=1 skill, not already
+    used in this plan. Highest smoothed score wins, id breaks ties — a pure
+    function of the reputation snapshot, so the plan stays reproducible.
+    """
+    wanted = set(designated.skills)
+    candidates = [
+        a
+        for a in state.list_agents()
+        if a.id not in taken
+        and a.id not in _KIT_AGENT_IDS
+        and get_worker(a.id) is not None
+        and reputation_svc.passes_floor(reps.get(a.id))
+        and wanted.intersection(a.skills)
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda a: (
+            -(reps[a.id].smoothed_bps if a.id in reps else round(a.rep * 2000)),
+            a.id,
+        )
+    )
+    return candidates[0]
 
 
 def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
