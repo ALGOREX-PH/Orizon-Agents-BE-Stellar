@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..security import require_api_key
-from ..services import reputation_svc
+from ..services import registry_sync, reputation_svc
 from ..state import state
 from ..stellar import cache as rcache
 from ..stellar import client as sc
@@ -160,6 +160,26 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
         # cause chain and RPC-layer logging.
         logger.warning("agent read failed for %s: %s", agent_id, e)
         raise HTTPException(404, "agent_read_failed") from e
+
+
+class SyncResponse(BaseModel):
+    synced: int
+
+
+@router.post("/agents/sync", response_model=SyncResponse)
+async def trigger_registry_sync() -> SyncResponse:
+    """Run one registry-sync pass now — the FE's post-registration fast path.
+
+    Advisory and idempotent (single-flight inside the service); the periodic
+    loop remains the source of truth. Failure is a real answer here — the
+    caller falls back to polling /api/agents until the next interval lands.
+    """
+    try:
+        synced = await registry_sync.sync_once()
+    except Exception as e:
+        logger.warning("triggered registry sync failed: %s", e)
+        raise HTTPException(503, "registry_sync_failed") from e
+    return SyncResponse(synced=synced)
 
 
 class AgentIdAvailability(BaseModel):
@@ -405,6 +425,11 @@ async def submit_signed(req: SubmitReq) -> dict:
     except Exception as e:
         logger.exception("signed xdr submit failed · tx_hash=%s source=%s", tx_hash, source)
         raise HTTPException(400, "submit_failed") from e
+    # A successful submit may be a fresh registration — kick one sync pass so
+    # the agent is listed within seconds instead of at the next interval
+    # (BLO-12 AC). Fire-and-forget: the response never waits on it.
+    if result.get("status") == "SUCCESS":
+        registry_sync.kick()
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
 

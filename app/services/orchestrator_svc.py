@@ -7,6 +7,7 @@ import secrets
 from typing import Any
 
 from ..agents.orchestrator import orchestrator_agent
+from ..agents.registry import get_worker
 from ..agents.workers.prompt_safety import fence_user_input
 from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
@@ -68,7 +69,11 @@ def _rep_fields(info: reputation_svc.RepInfo | None) -> dict[str, Any]:
 
 
 def _registry_prompt_fragment(reps: dict[str, reputation_svc.RepInfo]) -> str:
-    agents = state.list_agents()
+    # Indexed on-chain agents (story 1.02) have no local worker until Epic 2
+    # lands — they must be marketplace-visible but never planner-routable, and
+    # the filter sits on the assignment so the floor-starvation fallback below
+    # (which sorts this list, not `routable`) can never admit one either.
+    agents = [a for a in state.list_agents() if get_worker(a.id) is not None]
     routable = [a for a in agents if reputation_svc.passes_floor(reps.get(a.id))]
     if len(routable) < _MIN_ROUTABLE_AGENTS:
         logger.warning(
@@ -191,8 +196,11 @@ async def decompose(intent: str) -> DecomposeResponse:
     cleaned: list[PlanStep] = []
     for step in plan.steps:
         agent = state.agents.get(step.agent_id)
-        if not agent:
-            # Drop unknown ids silently — the model sometimes invents.
+        if not agent or get_worker(agent.id) is None:
+            # Drop unknown ids silently — the model sometimes invents — or
+            # names an indexed agent with no local worker — dropping it here
+            # means /execute can never reach the unknown-agent skip path for
+            # a planned step.
             continue
         cleaned.append(
             PlanStep(
