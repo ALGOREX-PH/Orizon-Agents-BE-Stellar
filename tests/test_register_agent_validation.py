@@ -46,7 +46,7 @@ def test_register_refuses_a_taken_id_before_signing(client, monkeypatch):
     monkeypatch.setattr(sc, "simulate_read", lambda *a, **k: {"id": "w1_ok"})
     r = _register(client)
     assert r.status_code == 409
-    assert "agent_id_taken" in r.text
+    assert "id_taken" in r.text
 
 
 def test_register_fails_open_when_the_preflight_read_fails(client, monkeypatch):
@@ -79,3 +79,10 @@ def test_register_names_an_unfunded_owner(client, monkeypatch):
     r = _register(client)
     assert r.status_code == 400
     assert "owner_account_unfunded" in r.text
+
+
+def test_register_refuses_the_seeded_namespace(client):
+    # agt_* belongs to the seeded catalog (seed.py); never silently rewrite.
+    r = _register(client, agent_id="agt_99zz")
+    assert r.status_code == 409
+    assert "id_reserved" in r.text

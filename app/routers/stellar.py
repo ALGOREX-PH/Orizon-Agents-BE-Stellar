@@ -250,6 +250,11 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
     from stellar_sdk.exceptions import AccountNotFoundException
 
+    # The seeded catalog owns the agt_ namespace (seed.py) — refuse it before
+    # spending an RPC round-trip, and never silently rewrite an operator's id.
+    if req.agent_id.startswith("agt_"):
+        raise HTTPException(409, "id_reserved")
+
     # UX preflight: refuse a taken id BEFORE the wallet signs — a duplicate
     # would otherwise only surface as the on-chain AlreadyExists, after the
     # user already approved the transaction. The simulate read RAISES for an
@@ -267,7 +272,7 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     except Exception:
         pass  # unknown id (or transient read failure) — proceed to build
     else:
-        raise HTTPException(409, "agent_id_taken")
+        raise HTTPException(409, "id_taken")
 
     try:
         from stellar_sdk import scval as _sv
