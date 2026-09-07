@@ -113,6 +113,10 @@ class PlanStep(BaseModel):
     # a substitution on the kit path. None on the normal path. Lets the plan
     # card badge the step inline without re-joining the response notices.
     substituted_for: str | None = None
+    # True when this step was re-admitted below the routing floor by the
+    # starvation backstop — kept so the plan stays workable, but flagged so the
+    # buyer sees it is a degraded choice. Inline mate to substituted_for.
+    degraded: bool = False
 
 
 class Plan(BaseModel):
