@@ -177,6 +177,25 @@ def test_response_missing_summary_is_rejected() -> None:
     asyncio.run(go())
 
 
+def test_connect_failure_retries_once_then_raises() -> None:
+    # No response was ever received, so the worker retries exactly once (safe:
+    # the operator never got the step) and then fails the dispatch.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("no route to host", request=request)
+
+    async def go() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, base_url="http://operator.local") as client:
+            with pytest.raises(ExternalDispatchError):
+                await _worker(client).run("x", "y")
+
+    asyncio.run(go())
+    assert calls["n"] == 2  # original attempt + exactly one retry
+
+
 def test_oversize_response_is_rejected() -> None:
     app = FastAPI()
 
