@@ -71,3 +71,23 @@ def test_sub_floor_agent_is_excluded_from_kit_plan(seeded: object) -> None:
     assert "agt_02k2" not in ids
     assert len(resp.steps) == 5
     assert any(n.kind == "excluded" and n.agent_id == "agt_02k2" for n in resp.notices)
+
+
+def test_sub_floor_agent_is_substituted_and_surfaced(seeded: object) -> None:
+    # agt_05x7 (seo.brief) shares the "seo" skill with off-pipeline agt_01h8
+    # (copywrite.v3), which clears the floor at cold start — so the role is
+    # filled by a substitute rather than dropped, and the swap is recorded.
+    resp = _run_kit({"agt_05x7": _sub_floor("agt_05x7")})
+
+    ids = [s.agent_id for s in resp.steps]
+    assert "agt_05x7" not in ids
+    assert "agt_01h8" in ids
+    assert len(resp.steps) == 6  # a substitution keeps the pipeline full
+
+    step = next(s for s in resp.steps if s.agent_id == "agt_01h8")
+    assert step.substituted_for == "agt_05x7"
+
+    note = next(n for n in resp.notices if n.kind == "substituted")
+    assert note.agent_id == "agt_05x7"
+    assert note.replacement_id == "agt_01h8"
+    assert "5500" in note.reason  # the notice names the floor it failed
