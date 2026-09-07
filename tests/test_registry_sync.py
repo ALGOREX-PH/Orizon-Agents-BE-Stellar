@@ -254,3 +254,31 @@ def test_lifespan_starts_and_stops_the_sync_task():
         assert registry_sync._task is not None
         assert not registry_sync._task.done()
     assert registry_sync._task is None
+
+
+def test_successful_submit_kicks_a_sync_pass(client, monkeypatch):
+    """The BLO-12 fast path: a SUCCESS submit fires one fire-and-forget sync
+    so a fresh registration is listed within seconds; a failed submit or a
+    submit error must not."""
+    from app.routers import stellar as stellar_router
+
+    kicks: list[bool] = []
+    monkeypatch.setattr(stellar_router.registry_sync, "kick", lambda: kicks.append(True))
+
+    monkeypatch.setattr(stellar_router.sc, "envelope_identity", lambda _xdr: ("deadbeef", "GSOURCE"))
+
+    async def _ok(_xdr):
+        return {"status": "SUCCESS", "hash": "deadbeef"}
+
+    monkeypatch.setattr(stellar_router.sc, "submit_signed_xdr_async", _ok)
+    r = client.post("/api/stellar/submit", json={"signed_xdr": "AAAA"})
+    assert r.status_code == 200
+    assert kicks == [True]
+
+    async def _failed(_xdr):
+        return {"status": "FAILED", "hash": "deadbeef"}
+
+    monkeypatch.setattr(stellar_router.sc, "submit_signed_xdr_async", _failed)
+    r = client.post("/api/stellar/submit", json={"signed_xdr": "AAAA"})
+    assert r.status_code == 200
+    assert kicks == [True]  # unchanged — no kick for a failed tx

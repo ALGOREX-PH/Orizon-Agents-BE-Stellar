@@ -425,6 +425,11 @@ async def submit_signed(req: SubmitReq) -> dict:
     except Exception as e:
         logger.exception("signed xdr submit failed · tx_hash=%s source=%s", tx_hash, source)
         raise HTTPException(400, "submit_failed") from e
+    # A successful submit may be a fresh registration — kick one sync pass so
+    # the agent is listed within seconds instead of at the next interval
+    # (BLO-12 AC). Fire-and-forget: the response never waits on it.
+    if result.get("status") == "SUCCESS":
+        registry_sync.kick()
     # Don't turn a FAILED tx into an HTTP error — the FE needs the hash + diagnostic.
     return result
 
