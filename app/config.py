@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     stellar_admin_address: str = ""
     stellar_signing_key: str = ""  # S... secret — inject via host secrets in prod
 
+    # Registry sync cadence (story 1.02). The background loop mirrors on-chain
+    # registrations into the marketplace every N seconds; values under 5 are
+    # clamped by the service, and a blank STELLAR_AGENT_REGISTRY disables it.
+    registry_sync_seconds: int = 15
+
     # ── PDAX (PHP ↔ crypto on/off-ramp, institutions API) ─────
     # Env: "production" | "stage" | "uat". Base URL is resolved per
     # environment in app/pdax/config.py.

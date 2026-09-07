@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 import time
 from typing import Annotated, Any, Literal
@@ -161,6 +162,55 @@ async def read_agent(agent_id: str = Path(..., pattern=AGENT_ID_PATTERN)) -> Age
         raise HTTPException(404, "agent_read_failed") from e
 
 
+class AgentIdAvailability(BaseModel):
+    available: bool
+    # Stable strings — story 1.04's form maps them to field errors and the
+    # 5.03 guide documents them: id_malformed · id_reserved · id_taken.
+    reason: str | None = None
+    message: str | None = None
+    owner: str | None = None
+
+
+@router.get("/agent-id-available/{agent_id}", response_model=AgentIdAvailability)
+async def agent_id_available(agent_id: str = Path(..., max_length=64)) -> AgentIdAvailability:
+    """Advisory pre-signature check for the registration form (id blur).
+
+    Deliberately loose on the path param so a malformed id gets a friendly
+    200 + reason instead of a bare 422 — the form shows the message inline.
+    The check is advisory only: the contract's AlreadyExists is the final
+    answer, and a race between this and submit is accepted (story 1.03).
+    """
+    if not re.fullmatch(AGENT_ID_PATTERN, agent_id):
+        return AgentIdAvailability(
+            available=False,
+            reason="id_malformed",
+            message="allowed: letters, digits and underscore, 1-32 chars",
+        )
+    if agent_id.startswith("agt_"):
+        return AgentIdAvailability(
+            available=False,
+            reason="id_reserved",
+            message="agt_ ids belong to the seeded catalog",
+        )
+    try:
+        found = await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(agent_id)],
+        )
+    except Exception:
+        # Unknown id or transient read failure — advisory, so fail open;
+        # the chain still guards the actual registration.
+        return AgentIdAvailability(available=True)
+    owner = found.get("owner") if isinstance(found, dict) else None
+    return AgentIdAvailability(
+        available=False,
+        reason="id_taken",
+        owner=owner if isinstance(owner, str) else None,
+    )
+
+
 @router.get("/reputation", response_model=ReputationBatch)
 async def read_reputations() -> ReputationBatch:
     """Smoothed reputation for every registered agent, plus the routing
@@ -237,15 +287,43 @@ async def read_attestation(job_id_hex: str = Path(..., pattern=JOB_ID_HEX_PATTER
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
     owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner")
-    agent_id: str = Field(..., min_length=1, max_length=32)
+    # Soroban Symbol charset — anything outside it would only fail on-chain,
+    # AFTER the user has already signed. Reject it at the API instead.
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
     name: str = Field(..., min_length=1, max_length=100)
-    skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(default_factory=list, max_length=16)
+    skills: list[Annotated[str, Field(pattern=AGENT_ID_PATTERN)]] = Field(default_factory=list, max_length=16)
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
 
 
 @router.post("/build/register-agent", response_model=XdrResponse)
 async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
     """Build unsigned XDR for AgentRegistry.register. Owner signs via Freighter."""
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    # The seeded catalog owns the agt_ namespace (seed.py) — refuse it before
+    # spending an RPC round-trip, and never silently rewrite an operator's id.
+    if req.agent_id.startswith("agt_"):
+        raise HTTPException(409, "id_reserved")
+
+    # UX preflight: refuse a taken id BEFORE the wallet signs — a duplicate
+    # would otherwise only surface as the on-chain AlreadyExists, after the
+    # user already approved the transaction. The simulate read RAISES for an
+    # unknown id (same contract behaviour read_agent relies on), so a read
+    # that succeeds means the id exists. Read failures fall through open: the
+    # chain stays the real guard, and the TOCTOU window between this check
+    # and the user's submit is accepted.
+    try:
+        await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(req.agent_id)],
+        )
+    except Exception:
+        pass  # unknown id (or transient read failure) — proceed to build
+    else:
+        raise HTTPException(409, "id_taken")
+
     try:
         from stellar_sdk import scval as _sv
 
@@ -264,6 +342,13 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
             source=req.owner,
         )
         return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        # The build loads the owner account before anything else, so an
+        # unfunded wallet dies here — and pre-hardening it surfaced as the
+        # same opaque build_failed as a duplicate id or a bad charset
+        # (1.01 audit finding). Name it so the FE can say "fund your wallet".
+        logger.warning("register-agent build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
     except Exception as e:
         logger.exception("register-agent build failed")
         raise HTTPException(400, "build_failed") from e
@@ -271,7 +356,9 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
 
 class AuthorizeReq(BaseModel):
     payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
-    agent_id: str = Field(..., min_length=1, max_length=32)
+    # Same Symbol charset rule as registration — a bad id here also only
+    # fails on-chain, after the payer signed the authorization envelope.
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
     max_amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
     ttl_seconds: int = Field(default=300, ge=30, le=3600)
 

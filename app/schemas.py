@@ -18,6 +18,9 @@ class Agent(BaseModel):
     status: AgentStatus
     runs: int
     real: bool = False  # whether backed by a real Agno Agent
+    # Registering wallet (G...) — populated for on-chain indexed agents,
+    # None for the seeded catalog. Story 1.08's operator view filters on it.
+    owner: str | None = None
 
 
 # ───── Tasks ───────────────────────────────────────────────

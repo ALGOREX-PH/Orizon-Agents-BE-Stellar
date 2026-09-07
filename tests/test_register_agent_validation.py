@@ -1,0 +1,128 @@
+"""Story 1.03 — the register/authorize build models reject what the chain
+would reject BEFORE the user signs: Symbol-charset ids and skills die at the
+router as 422s, and a duplicate agent id is refused as a 409 by a preflight
+read instead of surfacing as the on-chain AlreadyExists after signature."""
+
+import pytest
+
+from app.stellar import client as sc
+
+# A real, checksum-valid strkey (the suite's standard test address) — the
+# fail-open path reaches sc.addr(), which validates more than the regex.
+_OWNER = "GA7AI5TAJEZA27I666DSJC4MUJYBEWUYNNZWPU7R2ONA7IZQVO6R5OQV"
+
+_BODY = {
+    "owner": _OWNER,
+    "agent_id": "w1_ok",
+    "name": "Agent",
+    "skills": ["code"],
+    "price_usdc": 0.1,
+}
+
+
+def _register(client, **over):
+    return client.post("/api/stellar/build/register-agent", json={**_BODY, **over})
+
+
+@pytest.mark.parametrize("bad", ["has-hyphen", "has.dot", "ünicode", "a" * 33, ""])
+def test_register_rejects_non_symbol_agent_ids(client, bad):
+    assert _register(client, agent_id=bad).status_code == 422
+
+
+def test_register_rejects_non_symbol_skills(client):
+    assert _register(client, skills=["ok", "bad-skill"]).status_code == 422
+
+
+def test_authorize_rejects_a_non_symbol_agent_id(client):
+    r = client.post(
+        "/api/stellar/build/authorize",
+        json={"payer": _OWNER, "agent_id": "bad-id", "max_amount_usdc": 1.0},
+    )
+    assert r.status_code == 422
+
+
+def test_register_refuses_a_taken_id_before_signing(client, monkeypatch):
+    # The preflight read succeeding means the id exists on-chain.
+    monkeypatch.setattr(sc, "simulate_read", lambda *a, **k: {"id": "w1_ok"})
+    r = _register(client)
+    assert r.status_code == 409
+    assert "id_taken" in r.text
+
+
+def test_register_fails_open_when_the_preflight_read_fails(client, monkeypatch):
+    # A raising read means "unknown id or RPC down" — either way the build
+    # proceeds; the chain's AlreadyExists stays the real guard.
+    def _raise(*a, **k):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "simulate_read", _raise)
+    monkeypatch.setattr(sc, "build_invoke_xdr", lambda *a, **k: "AAAA-fake-xdr")
+    r = _register(client)
+    assert r.status_code == 200
+    assert r.json()["xdr"] == "AAAA-fake-xdr"
+
+
+def test_register_names_an_unfunded_owner(client, monkeypatch):
+    # 1.01 audit finding: load_account fails first for a new wallet, and the
+    # opaque build_failed was indistinguishable from a duplicate or a bad
+    # charset. The FE needs to be able to say "fund your wallet".
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    def _unknown(*a, **k):
+        raise RuntimeError("unknown id")
+
+    def _unfunded(*a, **k):
+        raise AccountNotFoundException("account not found")
+
+    monkeypatch.setattr(sc, "simulate_read", _unknown)
+    monkeypatch.setattr(sc, "build_invoke_xdr", _unfunded)
+    r = _register(client)
+    assert r.status_code == 400
+    assert "owner_account_unfunded" in r.text
+
+
+def test_register_refuses_the_seeded_namespace(client):
+    # agt_* belongs to the seeded catalog (seed.py); never silently rewrite.
+    r = _register(client, agent_id="agt_99zz")
+    assert r.status_code == 409
+    assert "id_reserved" in r.text
+
+
+# ── the advisory availability check (form id-blur) ──────────────────────
+
+
+def _available(client, agent_id):
+    return client.get(f"/api/stellar/agent-id-available/{agent_id}")
+
+
+def test_availability_reports_a_malformed_id_as_a_friendly_200(client):
+    r = _available(client, "has-hyphen")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False
+    assert body["reason"] == "id_malformed"
+    assert "underscore" in body["message"]
+
+
+def test_availability_reports_the_seeded_namespace_as_reserved(client):
+    body = _available(client, "agt_99zz").json()
+    assert body["available"] is False
+    assert body["reason"] == "id_reserved"
+
+
+def test_availability_reports_a_taken_id_with_its_owner(client, monkeypatch):
+    monkeypatch.setattr(sc, "simulate_read", lambda *a, **k: {"id": "w1_ok", "owner": _OWNER})
+    body = _available(client, "w1_ok").json()
+    assert body["available"] is False
+    assert body["reason"] == "id_taken"
+    assert body["owner"] == _OWNER
+
+
+def test_availability_fails_open_when_the_read_fails(client, monkeypatch):
+    def _raise(*a, **k):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "simulate_read", _raise)
+    body = _available(client, "w1_free").json()
+    assert body["available"] is True
+    assert body["reason"] is None
