@@ -282,3 +282,23 @@ def test_successful_submit_kicks_a_sync_pass(client, monkeypatch):
     r = client.post("/api/stellar/submit", json={"signed_xdr": "AAAA"})
     assert r.status_code == 200
     assert kicks == [True]  # unchanged — no kick for a failed tx
+
+
+def test_sync_trigger_endpoint_reports_count_and_failure(client, monkeypatch):
+    from app.routers import stellar as stellar_router
+
+    async def _three():
+        return 3
+
+    monkeypatch.setattr(stellar_router.registry_sync, "sync_once", _three)
+    r = client.post("/api/stellar/agents/sync")
+    assert r.status_code == 200
+    assert r.json() == {"synced": 3}
+
+    async def _boom():
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(stellar_router.registry_sync, "sync_once", _boom)
+    r = client.post("/api/stellar/agents/sync")
+    assert r.status_code == 503
+    assert "registry_sync_failed" in r.text
