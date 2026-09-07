@@ -162,3 +162,16 @@ def test_starvation_backstop_keeps_kit_plan_workable(seeded: object) -> None:
     # silently gone.
     excluded = {n.agent_id for n in resp.notices if n.kind == "excluded"}
     assert excluded == {"agt_02k2", "agt_12r0", "agt_08j2"}
+
+
+def test_kit_step_for_unseeded_agent_is_skipped_not_crashed(seeded: object) -> None:
+    # A kit pipeline id missing from the registry is a programmer error, not a
+    # floor action: the step is skipped (no notice) and the plan still builds.
+    state.agents.pop("agt_08j2", None)
+
+    resp = _run_kit({})
+
+    ids = [s.agent_id for s in resp.steps]
+    assert "agt_08j2" not in ids
+    assert len(resp.steps) == 5
+    assert not any(n.agent_id == "agt_08j2" for n in resp.notices)
