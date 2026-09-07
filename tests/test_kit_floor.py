@@ -133,3 +133,34 @@ def test_kit_path_applies_floor_without_calling_the_llm(
     assert "agt_05x7" not in ids
     assert "agt_01h8" in ids
     assert any(n.kind == "substituted" and n.agent_id == "agt_05x7" for n in resp.notices)
+
+
+def test_starvation_backstop_keeps_kit_plan_workable(seeded: object) -> None:
+    # Every kit agent falls below the floor at once. Only agt_05x7 has a
+    # matching off-pipeline substitute (agt_01h8), leaving one step — under the
+    # _MIN_ROUTABLE_AGENTS floor of 3. The backstop must re-admit the two
+    # highest-scored dropped agents so the buyer still gets a workable plan,
+    # recording the degradation; the rest are recorded as exclusions.
+    scores = {
+        "agt_09l5": 5000,
+        "agt_05x7": 4600,
+        "agt_02k2": 4000,
+        "agt_11c0": 4900,
+        "agt_12r0": 4800,
+        "agt_08j2": 4700,
+    }
+    resp = _run_kit({aid: _sub_floor(aid, smoothed=s) for aid, s in scores.items()})
+
+    ids = [s.agent_id for s in resp.steps]
+    assert len(resp.steps) >= orchestrator_svc._MIN_ROUTABLE_AGENTS
+    assert "agt_01h8" in ids  # the one substitution still stands
+
+    # Top two dropped agents by smoothed score are re-admitted, not the rest.
+    degraded = {n.agent_id for n in resp.notices if n.kind == "degraded"}
+    assert degraded == {"agt_09l5", "agt_11c0"}
+    assert {"agt_09l5", "agt_11c0"} <= set(ids)
+
+    # Everything else the floor removed is surfaced as an exclusion, never
+    # silently gone.
+    excluded = {n.agent_id for n in resp.notices if n.kind == "excluded"}
+    assert excluded == {"agt_02k2", "agt_12r0", "agt_08j2"}
