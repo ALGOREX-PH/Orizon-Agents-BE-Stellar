@@ -43,3 +43,23 @@ def test_signature_from_a_different_wallet_is_rejected() -> None:
     nonce = issue_challenge("ext_c")
     # a valid signature — but from a wallet that does not own the agent
     assert verify_challenge("ext_c", owner.public_key, _sign(attacker, nonce)) is False
+
+
+def test_no_outstanding_challenge_is_rejected() -> None:
+    owner = Keypair.random()
+    # nothing was ever issued for this agent id
+    bogus = base64.b64encode(b"x" * 64).decode("ascii")
+    assert verify_challenge("ext_never_issued", owner.public_key, bogus) is False
+
+
+def test_expired_challenge_is_rejected() -> None:
+    owner = Keypair.random()
+    nonce = issue_challenge("ext_d", ttl_seconds=-1)  # already expired at issue
+    assert verify_challenge("ext_d", owner.public_key, _sign(owner, nonce)) is False
+
+
+def test_malformed_owner_address_is_rejected() -> None:
+    owner = Keypair.random()
+    nonce = issue_challenge("ext_e")
+    # signature is genuine; the owner address is not a valid G-address
+    assert verify_challenge("ext_e", "not-a-valid-stellar-address", _sign(owner, nonce)) is False
