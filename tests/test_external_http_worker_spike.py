@@ -118,3 +118,45 @@ def test_orchestrator_accepts_the_external_dispatch_response(monkeypatch: pytest
     assert final.spent == 0.02  # the external step was billed at its registered price
     assert final.artifact is not None
     assert final.artifact["title"] == "landing.html"
+
+
+def test_operator_error_fails_the_step_unbilled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A failing external endpoint must degrade exactly like a failing local
+    # worker: step skipped, nothing billed, the workflow does not crash.
+    app = FastAPI()
+
+    @app.post("/run")
+    async def run(_req: Request) -> JSONResponse:
+        return JSONResponse({"error": {"code": "boom", "message": "operator is down"}}, status_code=500)
+
+    async def go() -> None:
+        async with _client_for(app) as client:
+            worker = _worker(client)
+            monkeypatch.setattr(execution_svc, "get_worker", lambda aid: worker if aid == "ext_demo1" else None)
+            plan = StoredPlan(
+                id="pln_ext_fail",
+                intent="build a bakery landing page",
+                plan=Plan(
+                    steps=[
+                        PlanStep(
+                            agent_id="ext_demo1",
+                            agent_name="external.demo",
+                            rationale="build the page",
+                            est_price_usdc=0.02,
+                            est_eta_seconds=1.0,
+                        )
+                    ]
+                ),
+                total_usdc=0.02,
+                total_eta=1.0,
+            )
+            state.add_plan(plan)
+            state.add_task(Task(id="tsk_ext_fail", intent=plan.intent, agents=1, spent=0.0, status="running"))
+            await execution_svc._run(plan, "tsk_ext_fail")
+
+    asyncio.run(go())
+
+    final = state.tasks["tsk_ext_fail"]
+    assert final.status == "failed"
+    assert final.spent == 0.0
+    assert final.artifact is None
