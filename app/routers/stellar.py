@@ -237,7 +237,9 @@ async def read_attestation(job_id_hex: str = Path(..., pattern=JOB_ID_HEX_PATTER
 # ── writes (user signs via Freighter) ───────────────────────────
 class RegisterAgentReq(BaseModel):
     owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the agent owner")
-    agent_id: str = Field(..., min_length=1, max_length=32)
+    # Soroban Symbol charset — anything outside it would only fail on-chain,
+    # AFTER the user has already signed. Reject it at the API instead.
+    agent_id: str = Field(..., pattern=r"^[A-Za-z0-9_]{1,32}$")
     name: str = Field(..., min_length=1, max_length=100)
     skills: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(default_factory=list, max_length=16)
     price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
