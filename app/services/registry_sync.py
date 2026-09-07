@@ -182,6 +182,23 @@ def _on_task_done(task: asyncio.Task) -> None:
         logger.error("registry sync loop died: %s", exc, exc_info=exc)
 
 
+def kick() -> None:
+    """Fire-and-forget one sync pass — the post-submit fast path (BLO-12).
+
+    A successful registration should appear in the marketplace within
+    seconds, not at the next interval. Failures are swallowed at DEBUG:
+    the periodic loop retries anyway, and a submit response must never
+    wait on (or fail because of) a refresh.
+    """
+
+    def _swallow(t: asyncio.Task[int]) -> None:
+        if not t.cancelled() and t.exception() is not None:
+            logger.debug("kicked registry sync failed: %s", t.exception())
+
+    task = asyncio.get_running_loop().create_task(sync_once())
+    task.add_done_callback(_swallow)
+
+
 def start() -> None:
     """Start the background sync loop. Idempotent — a live loop is kept."""
     global _task
