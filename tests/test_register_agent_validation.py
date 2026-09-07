@@ -86,3 +86,43 @@ def test_register_refuses_the_seeded_namespace(client):
     r = _register(client, agent_id="agt_99zz")
     assert r.status_code == 409
     assert "id_reserved" in r.text
+
+
+# ── the advisory availability check (form id-blur) ──────────────────────
+
+
+def _available(client, agent_id):
+    return client.get(f"/api/stellar/agent-id-available/{agent_id}")
+
+
+def test_availability_reports_a_malformed_id_as_a_friendly_200(client):
+    r = _available(client, "has-hyphen")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False
+    assert body["reason"] == "id_malformed"
+    assert "underscore" in body["message"]
+
+
+def test_availability_reports_the_seeded_namespace_as_reserved(client):
+    body = _available(client, "agt_99zz").json()
+    assert body["available"] is False
+    assert body["reason"] == "id_reserved"
+
+
+def test_availability_reports_a_taken_id_with_its_owner(client, monkeypatch):
+    monkeypatch.setattr(sc, "simulate_read", lambda *a, **k: {"id": "w1_ok", "owner": _OWNER})
+    body = _available(client, "w1_ok").json()
+    assert body["available"] is False
+    assert body["reason"] == "id_taken"
+    assert body["owner"] == _OWNER
+
+
+def test_availability_fails_open_when_the_read_fails(client, monkeypatch):
+    def _raise(*a, **k):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(sc, "simulate_read", _raise)
+    body = _available(client, "w1_free").json()
+    assert body["available"] is True
+    assert body["reason"] is None
