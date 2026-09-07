@@ -241,3 +241,16 @@ def test_start_is_idempotent_and_stop_clears_the_task(monkeypatch):
         assert first is not None and first.cancelled()
 
     asyncio.run(scenario())
+
+
+def test_lifespan_starts_and_stops_the_sync_task():
+    """Every TestClient runs lifespan — the loop must exist inside the app
+    context and be fully reaped on exit, or every test would leak a task."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app):
+        assert registry_sync._task is not None
+        assert not registry_sync._task.done()
+    assert registry_sync._task is None

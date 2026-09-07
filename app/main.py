@@ -38,7 +38,7 @@ from .security import (
     request_id_var,
 )
 from .seed import seed_registry
-from .services import execution_svc
+from .services import execution_svc, registry_sync
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -87,7 +87,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # blocking Soroban SDK calls without oversubscribing the worker.
     executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="soroban")
     asyncio.get_running_loop().set_default_executor(executor)
+    # Mirror on-chain registrations into the marketplace (story 1.02). Started
+    # after the executor bind so its to_thread reads use the bounded pool; the
+    # loop no-ops while STELLAR_AGENT_REGISTRY is blank, which keeps the
+    # hermetic test suite offline.
+    registry_sync.start()
     yield
+    # Stop the sync loop first — it must not fire a fresh RPC pass while the
+    # shutdown below is draining execution tasks.
+    await registry_sync.stop()
     # Drain in-flight background executions: a bounded grace window to let
     # them finish, then cancel stragglers and reap the cancellations so the
     # process exits without "task was destroyed but it is pending" noise.
