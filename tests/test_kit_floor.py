@@ -109,9 +109,7 @@ def test_kit_plan_is_deterministic(seeded: object) -> None:
     assert first.total_eta == second.total_eta
 
 
-def test_kit_path_applies_floor_without_calling_the_llm(
-    seeded: object, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_kit_path_applies_floor_without_calling_the_llm(seeded: object, monkeypatch: pytest.MonkeyPatch) -> None:
     # Drive the full public entry point: decompose() must detect the kit,
     # apply the floor, and never touch the orchestrator LLM. Any call to it
     # fails the test loudly.
