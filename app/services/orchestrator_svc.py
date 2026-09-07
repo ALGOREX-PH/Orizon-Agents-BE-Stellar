@@ -11,7 +11,7 @@ from ..agents.registry import get_worker
 from ..agents.workers.prompt_safety import fence_user_input
 from ..config import settings
 from ..demo_kits import DemoKit, detect_kit
-from ..schemas import Agent, DecomposeResponse, Plan, PlanStep, StoredPlan
+from ..schemas import Agent, DecomposeResponse, Plan, PlanFloorNotice, PlanStep, StoredPlan
 from ..state import state
 from . import reputation_svc
 
@@ -178,14 +178,23 @@ def build_planning_prompt(registry_block: str, intent: str) -> str:
 async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_svc.RepInfo]) -> DecomposeResponse:
     """Deterministic 6-step plan for a curated demo intent. No LLM call.
 
+    The reputation floor is applied to every pipeline agent, exactly as on the
+    free-form path: a sub-floor agent is replaced by a floor-clearing worker
+    that shares a skill, or dropped, and every such action is recorded on the
+    response so the buyer never sees a silently reshuffled pipeline (story
+    3.02). Given the same reputation snapshot the plan — steps and notices — is
+    identical, with no LLM call.
+
     A short randomized sleep up front mimics orchestrator "thinking time" so
     the Decompose UX feels like real LLM planning instead of a hardcoded dict
-    being unpacked. ~1.4–2.4 s matches what a small reasoning-model call to
-    plan 6 steps would actually take.
+    being unpacked. It changes timing only, never plan content.
     """
     await asyncio.sleep(1.4 + random.random() * 1.0)
 
     steps: list[PlanStep] = []
+    notices: list[PlanFloorNotice] = []
+    taken: set[str] = set()
+
     for agent_id, rationale in _KIT_PIPELINE:
         agent = state.agents.get(agent_id)
         if agent is None:
@@ -193,16 +202,39 @@ async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_
             # is a programmer error. Skip the step rather than crash the
             # whole pipeline.
             continue
-        steps.append(
-            PlanStep(
-                agent_id=agent.id,
-                agent_name=agent.name,
-                rationale=rationale,
-                est_price_usdc=agent.price,
-                est_eta_seconds=_KIT_ETAS.get(agent_id, 1.0),
-                **_rep_fields(reps.get(agent.id)),
+
+        eta = _KIT_ETAS.get(agent_id, 1.0)
+        info = reps.get(agent.id)
+        if reputation_svc.passes_floor(info):
+            steps.append(_kit_step(agent, rationale, eta, reps))
+            taken.add(agent.id)
+            continue
+
+        # Sub-floor: substitute with a floor-clearing off-pipeline worker that
+        # shares a skill, else drop the step. Either way the buyer is told.
+        sub = _floor_substitute(agent, reps, taken)
+        if sub is not None:
+            steps.append(_kit_step(sub, rationale, eta, reps, substituted_for=agent.id))
+            taken.add(sub.id)
+            notices.append(
+                PlanFloorNotice(
+                    kind="substituted",
+                    agent_id=agent.id,
+                    agent_name=agent.name,
+                    replacement_id=sub.id,
+                    replacement_name=sub.name,
+                    reason=_floor_reason(info),
+                )
             )
-        )
+        else:
+            notices.append(
+                PlanFloorNotice(
+                    kind="excluded",
+                    agent_id=agent.id,
+                    agent_name=agent.name,
+                    reason=_floor_reason(info),
+                )
+            )
 
     plan_id = f"pln_{secrets.token_hex(4)}"
     total_price = sum(s.est_price_usdc for s in steps)
@@ -223,6 +255,7 @@ async def _build_kit_plan(intent: str, kit: DemoKit, reps: dict[str, reputation_
         steps=steps,
         total_usdc=round(total_price, 4),
         total_eta=round(total_eta, 2),
+        notices=notices,
     )
 
 
