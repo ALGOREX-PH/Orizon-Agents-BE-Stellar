@@ -109,6 +109,10 @@ class PlanStep(BaseModel):
     est_eta_seconds: float = Field(..., ge=0)
     rep_bps: int | None = None  # smoothed reputation at plan time (0..10_000)
     rep_source: Literal["onchain", "prior"] | None = None
+    # The designated agent this step replaced, when the reputation floor forced
+    # a substitution on the kit path. None on the normal path. Lets the plan
+    # card badge the step inline without re-joining the response notices.
+    substituted_for: str | None = None
 
 
 class Plan(BaseModel):
