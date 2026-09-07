@@ -273,7 +273,9 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
 
 class AuthorizeReq(BaseModel):
     payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
-    agent_id: str = Field(..., min_length=1, max_length=32)
+    # Same Symbol charset rule as registration — a bad id here also only
+    # fails on-chain, after the payer signed the authorization envelope.
+    agent_id: str = Field(..., pattern=r"^[A-Za-z0-9_]{1,32}$")
     max_amount_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
     ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
