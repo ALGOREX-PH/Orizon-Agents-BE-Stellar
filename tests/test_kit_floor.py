@@ -107,3 +107,29 @@ def test_kit_plan_is_deterministic(seeded: object) -> None:
     ]
     assert first.total_usdc == second.total_usdc
     assert first.total_eta == second.total_eta
+
+
+def test_kit_path_applies_floor_without_calling_the_llm(
+    seeded: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Drive the full public entry point: decompose() must detect the kit,
+    # apply the floor, and never touch the orchestrator LLM. Any call to it
+    # fails the test loudly.
+    async def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("kit path must never call the LLM")
+
+    monkeypatch.setattr(orchestrator_svc.orchestrator_agent, "arun", _boom)
+
+    reps = {"agt_05x7": _sub_floor("agt_05x7")}
+
+    async def _fake_reps(_ids: object, *_a: object, **_k: object) -> dict[str, RepInfo]:
+        return reps
+
+    monkeypatch.setattr(orchestrator_svc.reputation_svc, "fetch_reps", _fake_reps)
+
+    resp = asyncio.run(orchestrator_svc.decompose(KIT_INTENT))
+
+    ids = [s.agent_id for s in resp.steps]
+    assert "agt_05x7" not in ids
+    assert "agt_01h8" in ids
+    assert any(n.kind == "substituted" and n.agent_id == "agt_05x7" for n in resp.notices)
