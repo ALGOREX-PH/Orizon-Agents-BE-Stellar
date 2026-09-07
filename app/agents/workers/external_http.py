@@ -1,0 +1,176 @@
+"""External-agent execution over HTTP — the story-1.06 dispatch prototype.
+
+Candidate A of the 1.06 spike (off-chain endpoint binding): an externally
+registered agent is executed by POSTing its step to an operator-hosted URL and
+mapping the JSON response back into the worker-output dict the orchestrator
+already consumes. This implements the existing `Worker` interface, so it drops
+straight into `execution_svc._run` at the `get_worker` seam — the exact point
+where an unknown agent is skipped today — with no change to the run loop.
+
+Envelope (frozen by this spike; see docs/decisions/0001-external-agent-execution.md):
+
+    Request   POST {endpoint}
+              headers  Content-Type: application/json
+                       Idempotency-Key: {dispatch_id}
+                       User-Agent: orizon-orchestrator/1
+              body     {"v": 1, "agent_id", "intent", "rationale",
+                        "context", "dispatch_id"}
+
+    Response  200, application/json, body = the worker-output object:
+              {"summary": str (required, non-empty),
+               "artifact"?, "critic_violations"?, "critic_notes"?,
+               "preview_url"?, "source"?}
+
+    Timeouts  connect 5 s, total 110 s — under execution_svc.STEP_TIMEOUT_SECONDS
+              (120 s) so a slow operator is judged here, cleanly, as a failed
+              step rather than as the run loop's ambiguous outer timeout.
+    Retry     at most once, and ONLY when the connection never established
+              (ConnectError / ConnectTimeout): the operator never received the
+              step, so a retry cannot double-run committed work, and the
+              unchanged Idempotency-Key lets it dedupe anyway. A returned status
+              — even 5xx — is never retried: the operator answered.
+    Size cap  response body streamed and capped at MAX_RESPONSE_BYTES; an
+              oversize body fails the step before it is buffered.
+
+Any failure — no connection after the retry, a non-2xx status, an oversize or
+unreadable body, non-object JSON, or a missing `summary` — is raised as
+ExternalDispatchError. execution_svc catches it exactly like a raising local
+worker: the step is skipped, not billed, and the workflow degrades rather than
+crashing.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+from typing import Any
+
+import httpx
+
+from .base import Worker
+
+logger = logging.getLogger(__name__)
+
+ENVELOPE_VERSION = 1
+CONNECT_TIMEOUT_SECONDS = 5.0
+# Under execution_svc.STEP_TIMEOUT_SECONDS (120 s) on purpose — see module docstring.
+TOTAL_TIMEOUT_SECONDS = 110.0
+MAX_RESPONSE_BYTES = 1_048_576  # 1 MiB — headroom over the ~10-60 KiB artifacts
+_USER_AGENT = "orizon-orchestrator/1"
+
+
+class ExternalDispatchError(RuntimeError):
+    """A step dispatched to an operator endpoint did not produce a usable
+    result. Raised so execution_svc treats the step as failed — identical to a
+    raising local worker: skipped, unbilled, the workflow degrades."""
+
+
+class ExternalHttpWorker(Worker):
+    """Dispatches a plan step to an operator-hosted HTTP endpoint.
+
+    `client` is injectable so a test can drive an in-process ASGI endpoint via
+    httpx.ASGITransport; in production the worker owns a short-lived client per
+    dispatch, configured with the envelope timeouts.
+    """
+
+    real = True
+
+    def __init__(
+        self,
+        agent_id: str,
+        name: str,
+        endpoint_url: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.id = agent_id
+        self.name = name
+        self.endpoint_url = endpoint_url
+        self._client = client
+
+    async def run(
+        self,
+        intent: str,
+        rationale: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        dispatch_id = secrets.token_hex(8)
+        payload: dict[str, Any] = {
+            "v": ENVELOPE_VERSION,
+            "agent_id": self.id,
+            "intent": intent,
+            "rationale": rationale,
+            "context": context or {},
+            "dispatch_id": dispatch_id,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": dispatch_id,
+            "User-Agent": _USER_AGENT,
+        }
+        return await self._dispatch(payload, headers, dispatch_id)
+
+    async def _dispatch(self, payload: dict[str, Any], headers: dict[str, str], dispatch_id: str) -> dict[str, Any]:
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(
+            timeout=httpx.Timeout(TOTAL_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
+        )
+        try:
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    return await self._once(client, payload, headers, dispatch_id)
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    # The connection never established, so the operator never
+                    # received the step: a single retry cannot double-run work.
+                    if attempts >= 2:
+                        raise ExternalDispatchError(
+                            f"external dispatch {dispatch_id} to {self.id}: no connection after retry"
+                        ) from e
+                    logger.warning(
+                        "external dispatch %s to %s: connection failed (%s) — retrying once",
+                        dispatch_id,
+                        self.id,
+                        type(e).__name__,
+                    )
+        finally:
+            if owns_client:
+                await client.aclose()
+
+    async def _once(
+        self, client: httpx.AsyncClient, payload: dict[str, Any], headers: dict[str, str], dispatch_id: str
+    ) -> dict[str, Any]:
+        async with client.stream("POST", self.endpoint_url, json=payload, headers=headers) as resp:
+            if resp.status_code // 100 != 2:
+                raise ExternalDispatchError(f"external dispatch {dispatch_id} to {self.id}: HTTP {resp.status_code}")
+            total = 0
+            chunks: list[bytes] = []
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_RESPONSE_BYTES:
+                    raise ExternalDispatchError(
+                        f"external dispatch {dispatch_id} to {self.id}: response exceeds {MAX_RESPONSE_BYTES}-byte cap"
+                    )
+                chunks.append(chunk)
+        return self._parse(b"".join(chunks), dispatch_id)
+
+    def _parse(self, body: bytes, dispatch_id: str) -> dict[str, Any]:
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise ExternalDispatchError(
+                f"external dispatch {dispatch_id} to {self.id}: response was not valid JSON"
+            ) from e
+        if not isinstance(data, dict):
+            raise ExternalDispatchError(
+                f"external dispatch {dispatch_id} to {self.id}: response JSON was "
+                f"{type(data).__name__}, expected an object"
+            )
+        summary = data.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ExternalDispatchError(
+                f"external dispatch {dispatch_id} to {self.id}: response missing a non-empty 'summary'"
+            )
+        return data
