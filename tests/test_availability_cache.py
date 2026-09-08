@@ -1,0 +1,43 @@
+"""Story 1.09 — the agent-id availability check caches its Soroban read.
+
+Repeated blur checks of the same id, and any concurrent burst, collapse to a
+single upstream read within the TTL window (AC2). The malformed/reserved
+short-circuits never touch the chain at all. Ids are unique per test so the
+in-process cache cannot leak an outcome across tests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+import app.stellar.client as sc
+from app.routers.stellar import agent_id_available
+from app.stellar import cache as rcache
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache() -> Any:
+    rcache.clear()
+    yield
+    rcache.clear()
+
+
+def test_repeated_available_checks_hit_rpc_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
+    def fake_read(*_a: object, **_k: object) -> dict[str, Any]:
+        calls["n"] += 1
+        raise RuntimeError("HostError: no such agent")  # unknown id → available
+
+    monkeypatch.setattr(sc, "simulate_read", fake_read)
+
+    async def go() -> list[Any]:
+        return [await agent_id_available("cache_free_id") for _ in range(5)]
+
+    results = asyncio.run(go())
+
+    assert all(r.available for r in results)
+    assert calls["n"] == 1  # five checks, one Soroban read
