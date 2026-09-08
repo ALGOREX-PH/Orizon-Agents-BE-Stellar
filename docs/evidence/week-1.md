@@ -1,5 +1,46 @@
 # Week 1 evidence — D1 · Permissionless Agent Registration (backend findings)
 
+## Operator agent management — change price, delist / relist (story 1.08 / BLO-44, 2026-09-08)
+
+An operator who registered at the wrong price was stuck with it forever
+(`register` rejects a duplicate id), and story 1.02's "a delisted agent stops
+being routable" had no way to delist. The contract already exposed
+`update_price(id, new_price)` and `set_active(id, active)` (both
+`owner.require_auth()`); nothing reached them. Closed on both halves:
+
+**Backend** — two build endpoints mirroring `build_register_agent`:
+- `POST /api/stellar/build/update-price` → args `[sym(id), i128(usdc_to_i128(price))]`.
+- `POST /api/stellar/build/set-active` → args `[sym(id), to_bool(active)]`.
+Both: same charset + price validation at the router edge, `owner_account_unfunded`
+decoded from the build, and a **cached existence preflight** (reuses read_agent's
+`agent:{id}` key so it adds no new amplification — story 1.09) that returns a plain
+**404 `agent_not_found`** for an unregistered id instead of an opaque build error.
+`/submit` is reused unchanged. Ownership is the contract's `require_auth`, not
+re-checked server-side. 8 tests in `tests/test_agent_management.py`.
+
+**Frontend** — the registration signing flow was **extracted** into a shared,
+tested `lib/sign-submit.ts` (`signAndSubmit`: sign → submit → interpret, with a
+discriminated outcome and injectable `submit`/`interpret`), and **both** the
+register page and the new management surface run through it — so error handling
+cannot drift into a second, subtly different path (the card's explicit rule). An
+**owner-gated** `ManagePanel` on the agents page (shown only when
+`wallet.connected && agent.owner === wallet.address`) offers **Change price**
+(current → new + stroops, register-matching validation) and **Delist / Relist**
+with accurate confirmations: a price change applies to future plans only (an
+existing authorization charges the price it was signed against); delisting is
+reversible, never a delete, leaves in-flight authorized work untouched, and
+retains reputation + history. A successful change refreshes the listing
+immediately (`syncAgents()` + a re-fetch).
+
+**Reuse of the proven chain:** the build → sign → submit → land sequence itself
+was demonstrated live on testnet under story 1.05; 1.08 routes through the same
+`signAndSubmit`, so "the transaction lands" is inherited-proven. A dedicated live
+price-change tx belongs on the testnet evidence surface (1.11), alongside 1.05's.
+
+**Gates (2026-09-08):** BE ruff / format / mypy-strict clean, pytest green,
+coverage 87.37 %. FE typecheck / lint / prettier clean, **470 vitest tests**,
+coverage thresholds met, production build clean (`/app/agents` 5.04 kB).
+
 ## Abuse bounds on the public registration endpoints (story 1.09 / BLO-45, 2026-09-08)
 
 A **measure-first** story. The finding below is the deliverable; the only code
