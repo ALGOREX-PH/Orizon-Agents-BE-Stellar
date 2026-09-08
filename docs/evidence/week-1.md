@@ -1,5 +1,47 @@
 # Week 1 evidence — D1 · Permissionless Agent Registration (backend findings)
 
+## First external-wallet registration — evidence tooling (story 1.07 / BLO-17, 2026-09-08)
+
+The **Milestone 1 exit gate**. Its core artifact — an agent registered by a wallet
+Blocksmiths do not control, done unaided on the public testnet page — is
+inherently human/dashboard-gated: it needs the **public testnet surface** (story
+1.11) and a **real chapter contributor**. Neither can be faked (a self-run or a
+talked-through run is not a pass). What was built is the state-of-the-art rigor
+that turns a manual eyeball into a **machine-verifiable** gate and captures the
+artifacts at the moment of the run.
+
+**Evidence capture (FE):** the register success card is now a complete evidence
+bundle — the owner renders as a stellar.expert **account** link (so a reviewer
+can confirm "that wallet as source", AC1), alongside the tx hash + explorer link
+(`TxStatus`), and a one-click **Copy evidence** yields a structured block (agent
+id, owner, tx hash, both stellar.expert links, network, timestamp) in the exact
+shape the 5.05 index expects. Builder `lib/registration-evidence.ts` (unit-tested).
+
+**Machine verification (BE):** `app/evidence.py` (pure, typed, 10 unit tests) +
+the CLI `scripts/verify_registration.py` check a registration against **Horizon**
+(tx exists, succeeded, source = the wallet — AC1) and, with `--api-base`, the
+**marketplace API** (`/api/agents` shows the id `source:onchain` owned by that
+wallet, distinct from the 12 seeded — AC2). **Proven live** against the real 1.05
+registration:
+
+```
+$ python scripts/verify_registration.py --tx 416bea4f… --agent sign_probe_bb5c12 \
+    --owner GBI2I3WL…ADBH
+  [PASS] tx_on_horizon · [PASS] tx_succeeded · [PASS] tx_has_source · [PASS] source_matches
+  VERDICT: PASS - registration verified   (exit 0)
+```
+
+**Run kit (docs):** `docs/evidence/1.07-runbook.md` (the unaided contributor
+procedure), `1.07-friction-log.md` (the required AC3 friction template, filled
+during the run — or an explicit none-statement), and `1.07-evidence-index.md`
+(the 5.05 index: the real 1.05 row as a format reference, flagged as a
+developer-run that does **not** satisfy D1, plus a blank row for the real run).
+
+**AC status:** the *tooling* for AC1/AC2 is built + proven, AC4's non-technical
+path (open the stellar.expert link) is served by the success card, and AC3's
+template is ready. The three ACs' **evidence rows stay blank** until 1.11 is live
+and a chapter contributor runs it — that is the remaining, non-fakeable work.
+
 ## Operator agent management — change price, delist / relist (story 1.08 / BLO-44, 2026-09-08)
 
 An operator who registered at the wrong price was stuck with it forever
