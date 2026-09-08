@@ -212,23 +212,32 @@ async def agent_id_available(agent_id: str = Path(..., max_length=64)) -> AgentI
             reason="id_reserved",
             message="agt_ ids belong to the seeded catalog",
         )
-    try:
-        found = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().agent_registry,
-            "get",
-            [sc.sym(agent_id)],
+
+    async def _resolve() -> AgentIdAvailability:
+        # The same AgentRegistry.get read as read_agent, but under its own cache
+        # key and with a never-raises contract: an unknown id (simulate errors)
+        # and a transient read failure both mean "advisory: available" — the
+        # chain's AlreadyExists is the real guard. Returning a value rather than
+        # raising lets get_or_set positively cache BOTH outcomes, so repeated
+        # blur checks of the same id — taken or free — and any concurrent burst
+        # collapse to one Soroban read within the window (story 1.09).
+        try:
+            found = await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().agent_registry,
+                "get",
+                [sc.sym(agent_id)],
+            )
+        except Exception:
+            return AgentIdAvailability(available=True)
+        owner = found.get("owner") if isinstance(found, dict) else None
+        return AgentIdAvailability(
+            available=False,
+            reason="id_taken",
+            owner=owner if isinstance(owner, str) else None,
         )
-    except Exception:
-        # Unknown id or transient read failure — advisory, so fail open;
-        # the chain still guards the actual registration.
-        return AgentIdAvailability(available=True)
-    owner = found.get("owner") if isinstance(found, dict) else None
-    return AgentIdAvailability(
-        available=False,
-        reason="id_taken",
-        owner=owner if isinstance(owner, str) else None,
-    )
+
+    return await rcache.get_or_set(f"agentavail:{agent_id}", READ_TTL_SECONDS, _resolve)
 
 
 @router.get("/reputation", response_model=ReputationBatch)
