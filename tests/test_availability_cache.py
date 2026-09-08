@@ -41,3 +41,22 @@ def test_repeated_available_checks_hit_rpc_once(monkeypatch: pytest.MonkeyPatch)
 
     assert all(r.available for r in results)
     assert calls["n"] == 1  # five checks, one Soroban read
+
+
+def test_repeated_taken_checks_hit_rpc_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
+    def fake_read(*_a: object, **_k: object) -> dict[str, Any]:
+        calls["n"] += 1
+        return {"id": "cache_taken_id", "owner": "GBI2ABC"}
+
+    monkeypatch.setattr(sc, "simulate_read", fake_read)
+
+    async def go() -> list[Any]:
+        return [await agent_id_available("cache_taken_id") for _ in range(4)]
+
+    results = asyncio.run(go())
+
+    assert all((not r.available and r.reason == "id_taken") for r in results)
+    assert results[0].owner == "GBI2ABC"  # the taken outcome (incl. owner) is cached
+    assert calls["n"] == 1
