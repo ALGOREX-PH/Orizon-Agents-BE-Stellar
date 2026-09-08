@@ -32,13 +32,11 @@ def check_registration_tx(tx: dict[str, Any], expected_source: str | None = None
     checks: list[Check] = []
 
     successful = tx.get("successful") is True
-    checks.append(
-        Check(
-            "tx_succeeded",
-            successful,
-            "transaction successful on-chain" if successful else f"tx not successful (successful={tx.get('successful')!r})",
-        )
-    )
+    if successful:
+        tx_detail = "transaction successful on-chain"
+    else:
+        tx_detail = f"tx not successful (successful={tx.get('successful')!r})"
+    checks.append(Check("tx_succeeded", successful, tx_detail))
 
     source = tx.get("source_account")
     has_source = isinstance(source, str) and source.startswith("G")
