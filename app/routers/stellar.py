@@ -446,6 +446,44 @@ async def build_update_price(req: UpdatePriceReq) -> XdrResponse:
         raise HTTPException(400, "build_failed") from e
 
 
+class SetActiveReq(BaseModel):
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the owner (the signer)")
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
+    active: bool = Field(..., description="True relists the agent, False delists it")
+
+
+@router.post("/build/set-active", response_model=XdrResponse)
+async def build_set_active(req: SetActiveReq) -> XdrResponse:
+    """Build unsigned XDR for AgentRegistry.set_active (delist / relist). Owner signs.
+
+    Delisting is reversible — set_active(id, true) relists — and never deletes:
+    the agent's on-chain record, history and reputation survive. Ownership is the
+    contract's require_auth; an unregistered id is refused as a plain 404.
+    """
+    from stellar_sdk import scval as _sv
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    if not await _agent_exists(req.agent_id):
+        raise HTTPException(404, "agent_not_found")
+
+    try:
+        args = [sc.sym(req.agent_id), _sv.to_bool(req.active)]
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
+            sc.contract_ids().agent_registry,
+            "set_active",
+            args,
+            source=req.owner,
+        )
+        return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        logger.warning("set-active build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
+    except Exception as e:
+        logger.exception("set-active build failed")
+        raise HTTPException(400, "build_failed") from e
+
+
 class AuthorizeReq(BaseModel):
     payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
     # Same Symbol charset rule as registration — a bad id here also only
