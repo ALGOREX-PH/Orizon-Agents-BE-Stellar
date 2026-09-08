@@ -383,6 +383,69 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
         raise HTTPException(400, "build_failed") from e
 
 
+# ── agent management (owner signs; story 1.08) ──────────────────
+async def _agent_exists(agent_id: str) -> bool:
+    """Cached existence check on AgentRegistry.get(id), reusing read_agent's
+    cache key so a management preflight adds no new Soroban amplification
+    (story 1.09). The simulate raises for an unknown id → False. A seeded agt_
+    id is not on-chain, so it correctly reports as not found here."""
+
+    async def _fetch() -> Any:
+        return await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(agent_id)],
+        )
+
+    try:
+        await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
+    except Exception:
+        return False
+    return True
+
+
+class UpdatePriceReq(BaseModel):
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the owner (the signer)")
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
+    price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+
+
+@router.post("/build/update-price", response_model=XdrResponse)
+async def build_update_price(req: UpdatePriceReq) -> XdrResponse:
+    """Build unsigned XDR for AgentRegistry.update_price. Owner signs via Freighter.
+
+    The contract gates the write with agent.owner.require_auth(), so ownership is
+    not re-checked here — the FE only offers the action to the owner, and a
+    non-owner's signed tx fails on-chain. An unregistered id is refused as a
+    plain 404 rather than surfacing as an opaque build failure after simulate.
+    """
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    if not await _agent_exists(req.agent_id):
+        raise HTTPException(404, "agent_not_found")
+
+    try:
+        args = [
+            sc.sym(req.agent_id),
+            sc.i128(sc.usdc_to_i128(req.price_usdc)),
+        ]
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
+            sc.contract_ids().agent_registry,
+            "update_price",
+            args,
+            source=req.owner,
+        )
+        return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        logger.warning("update-price build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
+    except Exception as e:
+        logger.exception("update-price build failed")
+        raise HTTPException(400, "build_failed") from e
+
+
 class AuthorizeReq(BaseModel):
     payer: str = Field(..., pattern=r"^G[A-Z2-7]{55}$")
     # Same Symbol charset rule as registration — a bad id here also only
