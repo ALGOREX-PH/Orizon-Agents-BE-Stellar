@@ -212,23 +212,32 @@ async def agent_id_available(agent_id: str = Path(..., max_length=64)) -> AgentI
             reason="id_reserved",
             message="agt_ ids belong to the seeded catalog",
         )
-    try:
-        found = await asyncio.to_thread(
-            sc.simulate_read,
-            sc.contract_ids().agent_registry,
-            "get",
-            [sc.sym(agent_id)],
+
+    async def _resolve() -> AgentIdAvailability:
+        # The same AgentRegistry.get read as read_agent, but under its own cache
+        # key and with a never-raises contract: an unknown id (simulate errors)
+        # and a transient read failure both mean "advisory: available" — the
+        # chain's AlreadyExists is the real guard. Returning a value rather than
+        # raising lets get_or_set positively cache BOTH outcomes, so repeated
+        # blur checks of the same id — taken or free — and any concurrent burst
+        # collapse to one Soroban read within the window (story 1.09).
+        try:
+            found = await asyncio.to_thread(
+                sc.simulate_read,
+                sc.contract_ids().agent_registry,
+                "get",
+                [sc.sym(agent_id)],
+            )
+        except Exception:
+            return AgentIdAvailability(available=True)
+        owner = found.get("owner") if isinstance(found, dict) else None
+        return AgentIdAvailability(
+            available=False,
+            reason="id_taken",
+            owner=owner if isinstance(owner, str) else None,
         )
-    except Exception:
-        # Unknown id or transient read failure — advisory, so fail open;
-        # the chain still guards the actual registration.
-        return AgentIdAvailability(available=True)
-    owner = found.get("owner") if isinstance(found, dict) else None
-    return AgentIdAvailability(
-        available=False,
-        reason="id_taken",
-        owner=owner if isinstance(owner, str) else None,
-    )
+
+    return await rcache.get_or_set(f"agentavail:{agent_id}", READ_TTL_SECONDS, _resolve)
 
 
 @router.get("/reputation", response_model=ReputationBatch)
@@ -371,6 +380,107 @@ async def build_register_agent(req: RegisterAgentReq) -> XdrResponse:
         raise HTTPException(400, "owner_account_unfunded") from e
     except Exception as e:
         logger.exception("register-agent build failed")
+        raise HTTPException(400, "build_failed") from e
+
+
+# ── agent management (owner signs; story 1.08) ──────────────────
+async def _agent_exists(agent_id: str) -> bool:
+    """Cached existence check on AgentRegistry.get(id), reusing read_agent's
+    cache key so a management preflight adds no new Soroban amplification
+    (story 1.09). The simulate raises for an unknown id → False. A seeded agt_
+    id is not on-chain, so it correctly reports as not found here."""
+
+    async def _fetch() -> Any:
+        return await asyncio.to_thread(
+            sc.simulate_read,
+            sc.contract_ids().agent_registry,
+            "get",
+            [sc.sym(agent_id)],
+        )
+
+    try:
+        await rcache.get_or_set(f"agent:{agent_id}", READ_TTL_SECONDS, _fetch)
+    except Exception:
+        return False
+    return True
+
+
+class UpdatePriceReq(BaseModel):
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the owner (the signer)")
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
+    price_usdc: float = Field(..., gt=0, le=10_000, allow_inf_nan=False)
+
+
+@router.post("/build/update-price", response_model=XdrResponse)
+async def build_update_price(req: UpdatePriceReq) -> XdrResponse:
+    """Build unsigned XDR for AgentRegistry.update_price. Owner signs via Freighter.
+
+    The contract gates the write with agent.owner.require_auth(), so ownership is
+    not re-checked here — the FE only offers the action to the owner, and a
+    non-owner's signed tx fails on-chain. An unregistered id is refused as a
+    plain 404 rather than surfacing as an opaque build failure after simulate.
+    """
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    if not await _agent_exists(req.agent_id):
+        raise HTTPException(404, "agent_not_found")
+
+    try:
+        args = [
+            sc.sym(req.agent_id),
+            sc.i128(sc.usdc_to_i128(req.price_usdc)),
+        ]
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
+            sc.contract_ids().agent_registry,
+            "update_price",
+            args,
+            source=req.owner,
+        )
+        return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        logger.warning("update-price build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
+    except Exception as e:
+        logger.exception("update-price build failed")
+        raise HTTPException(400, "build_failed") from e
+
+
+class SetActiveReq(BaseModel):
+    owner: str = Field(..., pattern=r"^G[A-Z2-7]{55}$", description="G... address of the owner (the signer)")
+    agent_id: str = Field(..., pattern=AGENT_ID_PATTERN)
+    active: bool = Field(..., description="True relists the agent, False delists it")
+
+
+@router.post("/build/set-active", response_model=XdrResponse)
+async def build_set_active(req: SetActiveReq) -> XdrResponse:
+    """Build unsigned XDR for AgentRegistry.set_active (delist / relist). Owner signs.
+
+    Delisting is reversible — set_active(id, true) relists — and never deletes:
+    the agent's on-chain record, history and reputation survive. Ownership is the
+    contract's require_auth; an unregistered id is refused as a plain 404.
+    """
+    from stellar_sdk import scval as _sv
+    from stellar_sdk.exceptions import AccountNotFoundException
+
+    if not await _agent_exists(req.agent_id):
+        raise HTTPException(404, "agent_not_found")
+
+    try:
+        args = [sc.sym(req.agent_id), _sv.to_bool(req.active)]
+        xdr = await asyncio.to_thread(
+            sc.build_invoke_xdr,
+            sc.contract_ids().agent_registry,
+            "set_active",
+            args,
+            source=req.owner,
+        )
+        return XdrResponse(xdr=xdr)
+    except AccountNotFoundException as e:
+        logger.warning("set-active build: owner account not found: %s", req.owner)
+        raise HTTPException(400, "owner_account_unfunded") from e
+    except Exception as e:
+        logger.exception("set-active build failed")
         raise HTTPException(400, "build_failed") from e
 
 
