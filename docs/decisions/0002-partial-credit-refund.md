@@ -1,0 +1,95 @@
+# ADR 0002 — Partial-credit refund mechanism
+
+- **Status:** Accepted (spike 4.01 / BLO-29), 2026-09-12 — ratify with the Chapter Lead at the next check-in
+- **Deciders:** Danielle (lead)
+- **Gates:** all of Milestone 3 (Epic 4 — Dispute Window & Partial-Credit Refund)
+
+## Context
+
+SOW §4.1 D3 says the settler *"honors a partial-credit refund against the buyer's
+authorization envelope."* That mechanism does not exist. `PaymentEscrow.charge`
+transfers USDC **directly payer → agent owner** and the contract never takes
+custody; its ABI (`authorize`, `charge`, `revoke`, `authorization`, `receipt`,
+`settler`) has **no `refund` and no `set_settler`**, and the settler key is
+write-once at construction. So a dispute refund cannot be a reversal of the
+charge — there is nothing held to reverse. It must be a **new transfer from
+somewhere else.**
+
+The dispute window is post-seal, so the charge has already landed. And the
+settler already auto-rates every settled step under `Rated(agent_id, job_id)`,
+whose replay guard fires **before** `ReputationLedger.submit` reads `kind` — so a
+dispute rating on the same pair is rejected with `Error::Replay` (**R12**).
+
+## Decision
+
+**Option A — settler-funded platform credit.** On an upheld dispute the settler
+sends the credited amount to the buyer over the asset SAC
+(`transfer(settler → buyer)`) — a **platform credit, never a clawback** from the
+agent. Implemented in `app/services/refund_svc.py`:
+
+- `execute_refund(buyer, amount)` → `invoke_with_server_key_async(asset_sac,
+  "transfer", [settler, buyer, i128(usdc)])`, signed by the server (settler) key.
+- **R12:** `record_dispute_rating(...)` writes the dispute under
+  `dispute_job_id(job_id) = sha256(job_id || "dispute")[:16]` — a distinct but
+  deterministic id, so it clears the replay guard while staying linkable to the
+  disputed job.
+
+No contract change; ships inside the sprint; produces the two artifacts SOW §6.1
+requires (a dispute tx and a partial-refund tx on Stellar Expert testnet).
+
+### Refund policy (stated, not case-by-case)
+
+The credit is a **fraction of the disputed step's settled charge** (default
+`1.0` = the full step price; `credited_amount_usdc`). A dispute credits the
+buyer for the step that failed, which is a *partial* refund of the whole
+workflow. Buyer and operator both know the terms in advance.
+
+### Trust model (disclosed everywhere — SOW §3.8 standard)
+
+- The **platform funds** the credit; the disputed agent's only consequence is
+  **reputational** (the low dispute rating), never a seizure of its funds.
+- The **platform adjudicates** the dispute — there is **no on-chain
+  arbitration** in this sprint. This is a permissioned, trusted operation.
+
+### Why not B — new `refund` entrypoint on `PaymentEscrow`
+
+Economically cleanest and genuinely on-chain, but it requires changing the
+contract, redeploying, migrating live authorizations, and **re-publishing the
+four testnet contract ids that SOW §6.1 lists as submitted evidence** — barred
+without the Chapter Lead's agreement — plus the disputed agent's cooperation.
+~12–16 h against a 32 h epic. Rejected for the sprint.
+
+### Why not C — escrow hold with delayed release
+
+`charge` moves funds into contract custody, released after the window closes.
+Architecturally correct, makes refunds trivial — but it is a redesign of the
+payment path that breaks the existing x402 flow. Roadmap, not sprint. Rejected.
+
+## Proof (the AC "a real refund has landed on testnet") — DONE
+
+A real refund landed on testnet on 2026-09-12: tx
+`9b8ffaa44b2b966e4c3f1ab581f4203a30d282901ba3b231a578e46d8f919a68` (ledger
+4635132, `successful: true` on Horizon), the settler crediting the 1.05
+registrant `GBI2I3WL…` over the asset SAC. Full record + Stellar Expert link:
+[`docs/evidence/4.01-refund-testnet.md`](../evidence/4.01-refund-testnet.md).
+
+The mechanism and the R12 derivation are unit-tested (`tests/test_refund_svc.py`,
+5 tests). The live tx was produced by a signed settler transaction from the
+**funded testnet key** — run:
+
+```
+python scripts/prototype_refund.py --buyer <G...> --amount 0.054
+```
+
+with the testnet `STELLAR_SIGNING_KEY` set (the settler, funded via friendbot).
+It prints the refund tx hash → capture it on Stellar Expert for the evidence
+bundle. This is the one step that cannot be run from CI.
+
+## Epic 4 impact (estimate review)
+
+The mechanism is settled and the money-moving core is prototyped + tested, so the
+**32 h estimate holds** — 4.02 (dispute window state + endpoint), 4.03 (wire
+`execute_refund` into the settler path), 4.04 (the dispute rating via the derived
+id — now unblocked), 4.05/4.06 (FE dispute action + receipt). No contract
+redeploy required. Also feeds **5.06**: correct the Litepaper §6.1 claim that the
+settler key can be rotated (it cannot — write-once).
