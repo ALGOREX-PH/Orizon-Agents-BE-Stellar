@@ -17,6 +17,9 @@ Honest trust model, disclosed in every artifact (SOW §3.8 standard):
 from __future__ import annotations
 
 import hashlib
+from typing import Any
+
+from ..stellar import client as sc
 
 # Refund policy — the credited fraction of the DISPUTED STEP's settled charge.
 # A dispute credits the buyer for the step that failed; 1.0 = the full step
@@ -46,3 +49,28 @@ def credited_amount_usdc(step_charged_usdc: float, fraction: float = DEFAULT_CRE
     [0, the step charge]. `fraction` outside [0, 1] is clamped."""
     fraction = min(max(fraction, 0.0), 1.0)
     return round(max(step_charged_usdc, 0.0) * fraction, 7)
+
+
+async def execute_refund(buyer: str, amount_usdc: float) -> dict[str, Any]:
+    """Settler-funded platform credit: transfer `amount_usdc` from the settler
+    to the buyer over the asset SAC. Returns the invoke result (incl. `hash`).
+
+    A credit, never a clawback — the funds leave the platform wallet, so the
+    settler must hold enough of the asset. The server signing key IS the
+    settler, so the SAC `transfer(settler → buyer)` is authorised by that key.
+    """
+    settler = sc.signer_public_key()
+    return await sc.invoke_with_server_key_async(
+        sc.contract_ids().asset_sac,
+        "transfer",
+        [sc.addr(settler), sc.addr(buyer), sc.i128(sc.usdc_to_i128(amount_usdc))],
+    )
+
+
+async def record_dispute_rating(agent_id: str, job_id: bytes, buyer: str, weight_stroops: int) -> dict[str, Any]:
+    """Record an upheld dispute on-chain as a low rating under the DERIVED job
+    id (R12), so it lands despite the settled job's auto-rating already
+    occupying `Rated(agent_id, job_id)`. Kept linkable to the disputed job."""
+    return await sc.submit_rating_async(
+        agent_id, dispute_job_id(job_id), DISPUTE_RATING, weight_stroops, buyer, "dispute"
+    )
