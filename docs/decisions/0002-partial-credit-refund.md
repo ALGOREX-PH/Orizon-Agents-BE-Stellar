@@ -65,11 +65,17 @@ without the Chapter Lead's agreement — plus the disputed agent's cooperation.
 Architecturally correct, makes refunds trivial — but it is a redesign of the
 payment path that breaks the existing x402 flow. Roadmap, not sprint. Rejected.
 
-## Proof (the AC "a real refund has landed on testnet")
+## Proof (the AC "a real refund has landed on testnet") — DONE
+
+A real refund landed on testnet on 2026-09-12: tx
+`9b8ffaa44b2b966e4c3f1ab581f4203a30d282901ba3b231a578e46d8f919a68` (ledger
+4635132, `successful: true` on Horizon), the settler crediting the 1.05
+registrant `GBI2I3WL…` over the asset SAC. Full record + Stellar Expert link:
+[`docs/evidence/4.01-refund-testnet.md`](../evidence/4.01-refund-testnet.md).
 
 The mechanism and the R12 derivation are unit-tested (`tests/test_refund_svc.py`,
-5 tests). The live testnet refund tx needs a signed settler transaction from the
-**funded testnet key** (live on orizons.xyz since 1.11) — run:
+5 tests). The live tx was produced by a signed settler transaction from the
+**funded testnet key** — run:
 
 ```
 python scripts/prototype_refund.py --buyer <G...> --amount 0.054
