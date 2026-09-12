@@ -36,3 +36,42 @@ def test_credited_amount_full_partial_and_clamped() -> None:
     assert refund_svc.credited_amount_usdc(0.10, 2.0) == 0.10  # fraction clamped to 1.0
     assert refund_svc.credited_amount_usdc(0.10, -1.0) == 0.0  # fraction clamped to 0
     assert refund_svc.credited_amount_usdc(-5.0) == 0.0  # negative charge floored
+
+
+def test_execute_refund_transfers_from_settler_to_buyer(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    async def _fake_invoke(contract_id: str, fn: str, args: list) -> dict:
+        calls.update(contract=contract_id, fn=fn, args=args)
+        return {"hash": "refund_tx", "status": "SUCCESS"}
+
+    monkeypatch.setattr(sc, "signer_public_key", lambda: "GSETTLER")
+    monkeypatch.setattr(sc, "invoke_with_server_key_async", _fake_invoke)
+    monkeypatch.setattr(sc, "addr", lambda a: ("addr", a))
+    monkeypatch.setattr(sc, "i128", lambda v: ("i128", v))  # usdc_to_i128 stays real
+
+    result = asyncio.run(refund_svc.execute_refund("GBUYER", 0.08))
+
+    assert result["hash"] == "refund_tx"
+    assert calls["fn"] == "transfer"  # a SAC transfer, not a contract refund
+    assert calls["contract"] == sc.contract_ids().asset_sac
+    # settler → buyer, amount in stroops (0.08 USDC = 800_000)
+    assert calls["args"] == [("addr", "GSETTLER"), ("addr", "GBUYER"), ("i128", 800_000)]
+
+
+def test_record_dispute_rating_uses_the_derived_job_id(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    async def _fake_submit(agent_id, job_id, rating, weight, payer, kind) -> dict:
+        calls.update(agent_id=agent_id, job_id=job_id, rating=rating, weight=weight, payer=payer, kind=kind)
+        return {"hash": "rating_tx"}
+
+    monkeypatch.setattr(sc, "submit_rating_async", _fake_submit)
+    jid = bytes(range(16))
+    asyncio.run(refund_svc.record_dispute_rating("agt_x", jid, "GBUYER", 5_000_000))
+
+    assert calls["job_id"] == refund_svc.dispute_job_id(jid)  # derived, clears the replay guard
+    assert calls["job_id"] != jid
+    assert calls["kind"] == "dispute"
+    assert calls["rating"] == refund_svc.DISPUTE_RATING
+    assert calls["payer"] == "GBUYER"
