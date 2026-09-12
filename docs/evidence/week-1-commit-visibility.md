@@ -77,6 +77,4 @@ the Friday bundle.
 A `Co-authored-by:` trailer or a commit authored by Dan on Rie's behalf does not
 satisfy the rule — the commit **author** must be the member. The 99 UAT commits
 clear this: they are authored by `rie-hash14`, not co-authored. No fabricated or
-backdated commits; no invented evidence data. The Zarrah Exekiel Valles
-contributor question (non-approved member) remains open for the check-in (7.03)
-and is not relied on here.
+backdated commits; no invented evidence data.
